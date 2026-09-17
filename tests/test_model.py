@@ -13,6 +13,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import ValidationError
 
 import app.model as model_module
+import app.prompts as prompts_module
 from app.config import Settings
 from app.errors import ServiceError
 from app.model import OpenAIModelGateway
@@ -31,6 +32,7 @@ def settings() -> Settings:
         max_output_tokens=512,
         token_safety_margin=128,
         request_timeout_seconds=9,
+        llm_chat_extra_body={"thinking": {"type": "disabled"}},
     )
 
 
@@ -164,9 +166,11 @@ def test_prompt_resources_render_outside_project_working_directory(
 
     customer_prompt = customer_system_prompt()
     extraction_prompt = extraction_system_prompt()
+    tool_chat_prompt = getattr(prompts_module, "tool_chat_system_prompt")()
 
     assert customer_prompt.strip()
     assert extraction_prompt.strip()
+    assert tool_chat_prompt.strip()
     assert "{schema_json}" not in extraction_prompt
     assert '"request_type"' in extraction_prompt
 
@@ -241,6 +245,7 @@ async def test_extract_uses_chat_completions_json_mode_and_selected_token_field(
     )
     assert competing_field not in body
     assert body["response_format"] == {"type": "json_object"}
+    assert "thinking" not in body
     assert "tools" not in body
     assert "tool_choice" not in body
     assert body["messages"][-1] == {

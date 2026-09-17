@@ -20,6 +20,11 @@ def customer_system_prompt() -> str:
     return template.format()
 
 
+def tool_chat_system_prompt() -> str:
+    template = PromptTemplate.from_template(_load_template("tool_chat.txt"))
+    return template.format()
+
+
 def extraction_system_prompt() -> str:
     template = PromptTemplate.from_template(_load_template("after_sales.txt"))
     schema_json = json.dumps(

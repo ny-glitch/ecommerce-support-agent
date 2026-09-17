@@ -1,4 +1,4 @@
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import (
     Field,
@@ -14,6 +14,20 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 PositiveInt = Annotated[int, Field(gt=0)]
 ToolAttempts = Literal[1, 2]
 _HTTP_URL_ADAPTER = TypeAdapter(HttpUrl)
+_PROTECTED_CHAT_BODY_KEYS = frozenset(
+    {
+        "messages",
+        "tools",
+        "tool_choice",
+        "parallel_tool_calls",
+        "stream",
+        "stream_options",
+        "model",
+        "max_tokens",
+        "max_completion_tokens",
+        "response_format",
+    }
+)
 
 
 class Settings(BaseSettings):
@@ -31,6 +45,7 @@ class Settings(BaseSettings):
     llm_token_limit_param: Literal["max_tokens", "max_completion_tokens"] = (
         "max_completion_tokens"
     )
+    llm_chat_extra_body: dict[str, Any] = Field(default_factory=dict)
     context_window_tokens: PositiveInt = 8192
     max_output_tokens: PositiveInt = 1024
     token_safety_margin: PositiveInt = 512
@@ -45,6 +60,15 @@ class Settings(BaseSettings):
     @classmethod
     def validate_llm_base_url(cls, value: str) -> str:
         _HTTP_URL_ADAPTER.validate_python(value)
+        return value
+
+    @field_validator("llm_chat_extra_body")
+    @classmethod
+    def validate_llm_chat_extra_body(cls, value: dict[str, Any]) -> dict[str, Any]:
+        protected = _PROTECTED_CHAT_BODY_KEYS.intersection(value)
+        if protected:
+            names = ", ".join(sorted(protected))
+            raise ValueError(f"LLM chat extra body cannot override: {names}")
         return value
 
     @model_validator(mode="after")

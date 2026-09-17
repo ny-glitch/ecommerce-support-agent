@@ -5,7 +5,8 @@ from typing import Any, Protocol
 
 import openai
 from httpx import AsyncClient
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.tools import BaseTool
 from langchain_openai import ChatOpenAI
 from pydantic import ValidationError
 
@@ -17,6 +18,10 @@ from app.schemas import AfterSalesResult
 
 
 class ModelGateway(Protocol):
+    async def select(
+        self, messages: list[BaseMessage], tools: list[BaseTool]
+    ) -> AIMessage: ...
+
     def stream(self, messages: list[BaseMessage]) -> AsyncIterator[str]: ...
 
     async def extract(self, description: str) -> AfterSalesResult: ...
@@ -27,6 +32,10 @@ class ModelGateway(Protocol):
 class OpenAIModelGateway:
     def __init__(self, settings: Settings, *, model: ChatOpenAI | None = None) -> None:
         self._settings = settings
+        self._chat_extra_body = {
+            settings.llm_token_limit_param: settings.max_output_tokens,
+            **settings.llm_chat_extra_body,
+        }
         self._http_client: AsyncClient | None = None
         if model is None:
             self._http_client = AsyncClient(
@@ -52,11 +61,53 @@ class OpenAIModelGateway:
             include_raw=True,
         )
 
+    async def select(
+        self, messages: list[BaseMessage], tools: list[BaseTool]
+    ) -> AIMessage:
+        selector = self._model.bind_tools(
+            tools,
+            tool_choice="auto",
+            parallel_tool_calls=False,
+            extra_body=self._chat_extra_body,
+        )
+        try:
+            reply = await selector.ainvoke(messages)
+        except openai.LengthFinishReasonError as exc:
+            raise ServiceError(
+                code="UPSTREAM_INCOMPLETE",
+                message="模型回复未正常完成，请重试",
+                status_code=502,
+            ) from exc
+        except Exception as exc:
+            if isinstance(exc, ServiceError):
+                raise
+            raise ServiceError(
+                code="UPSTREAM_ERROR",
+                message="模型服务暂时不可用",
+                status_code=502,
+            ) from exc
+
+        finish_reason = reply.response_metadata.get("finish_reason")
+        incomplete_tool_call = finish_reason == "tool_calls" and not reply.tool_calls
+        if (
+            finish_reason not in {"stop", "tool_calls"}
+            or reply.invalid_tool_calls
+            or incomplete_tool_call
+        ):
+            raise ServiceError(
+                code="UPSTREAM_INCOMPLETE",
+                message="模型回复未正常完成，请重试",
+                status_code=502,
+            )
+        return reply
+
     async def stream(self, messages: list[BaseMessage]) -> AsyncIterator[str]:
         emitted_text = False
         finish_reason: str | None = None
         try:
-            async with aclosing(self._model.astream(messages)) as chunks:
+            async with aclosing(
+                self._model.astream(messages, extra_body=self._chat_extra_body)
+            ) as chunks:
                 async for chunk in chunks:
                     current_finish = chunk.response_metadata.get("finish_reason")
                     if isinstance(current_finish, str):
