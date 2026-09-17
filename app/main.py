@@ -3,12 +3,13 @@ import json
 from collections.abc import AsyncIterator
 from contextlib import aclosing, asynccontextmanager
 from dataclasses import dataclass
+from importlib import resources
 from typing import Annotated
 
 import anyio
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 
 from app.config import Settings, load_settings
@@ -108,6 +109,10 @@ def create_app(
             await app.state.gateway.aclose()
 
     app = FastAPI(lifespan=lifespan)
+
+    @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+    def home():
+        return resources.files("app").joinpath("web/index.html").read_text(encoding="utf-8")
 
     @app.exception_handler(ServiceError)
     async def service_error(request: Request, error: ServiceError):

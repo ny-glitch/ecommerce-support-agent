@@ -30,4 +30,4 @@ include = ["app", "app.*"]
 namespaces = false
 
 [tool.setuptools.package-data]
-app = ["prompts/*.txt"]
+app = ["prompts/*.txt", "web/*.html"]

@@ -46,6 +46,10 @@ REQUEST_TIMEOUT_SECONDS=60
 .venv/bin/python -m uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8000 --workers 1
 ```
 
+服务运行后打开 `http://127.0.0.1:8000/`，即可使用网页聊天、停止回复、新对话及售后提取。网页刷新会开始新对话；API密钥只在服务端读取。
+
+若8000已被其他项目占用，将启动命令的端口改成 `--port 8001`，访问 `http://127.0.0.1:8001/`；演示脚本相应使用 `BASE_URL=http://127.0.0.1:8001 bash scripts/demo.sh`。预览期间请保持服务进程运行。
+
 会话只保存在当前进程内存中。重启会清空全部会话；多 worker 之间也不会共享会话，因此本示例固定使用单 worker。
 
 ## API 调用

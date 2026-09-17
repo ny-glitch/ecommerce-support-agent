@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>智能客服 · 对话工作台</title>
+  <link rel="icon" href="data:,">
+  <style>
+    :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; color: #242738; background: #f8f9fc; --accent: #525fe8; --muted: #858999; --line: #e9ebf2; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    button, textarea { font: inherit; }
+    button { cursor: pointer; }
+    button:disabled { cursor: default; opacity: .5; }
+    button:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 3px solid #b2baff; outline-offset: 3px; }
+    button { transition: background .15s, border-color .15s; }
+    [hidden] { display: none !important; }
+    .app { display: grid; grid-template-columns: 226px minmax(0, 1fr); height: 100dvh; min-height: 440px; }
+    aside { background: #f0f2f8; border-right: 1px solid var(--line); padding: 28px 18px 22px; display: flex; flex-direction: column; }
+    .brand { display: flex; align-items: center; gap: 10px; padding: 0 8px; font-weight: 700; font-size: 18px; letter-spacing: .5px; }
+    .brandmark { width: 34px; height: 34px; background: var(--accent); color: white; border-radius: 11px; display: grid; place-items: center; }
+    svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+    .side-label { font-size: 11px; color: #999dab; letter-spacing: 2px; margin: 42px 14px 12px; }
+    .nav { display: flex; flex-direction: column; gap: 7px; }
+    .nav button { border: 0; border-radius: 9px; background: transparent; color: #707587; display: flex; align-items: center; gap: 11px; padding: 12px 14px; text-align: left; font-size: 14px; }
+    .nav button.active { background: #e3e7fc; color: #4652d1; font-weight: 600; }
+    .nav button:hover { background: #e5e8f4; }
+    .side-note { margin-top: auto; padding: 18px 12px 0; border-top: 1px solid #e2e5ee; color: #8a8fa2; font-size: 12px; line-height: 1.9; }
+    .side-note strong { color: #686f84; font-weight: 500; display: block; margin-bottom: 3px; }
+    main { min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+    header { height: 77px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 0 38px; border-bottom: 1px solid var(--line); background: #ffffffc9; }
+    .breadcrumb { color: #a0a4b3; font-size: 13px; display: flex; align-items: center; gap: 12px; }
+    .breadcrumb b { font-weight: 500; color: #454b60; }
+    .new-chat { background: white; border: 1px solid #dfe2ed; color: #565c74; border-radius: 8px; padding: 9px 13px; display: flex; gap: 6px; align-items: center; font-size: 12px; }
+    .new-chat:hover { background: #f4f5fd; border-color: #c9cef6; }
+    .new-chat svg { width: 15px; height: 15px; }
+    .mobile-tabs { display: none; }
+    .notice { margin: 14px 26px 0; padding: 12px 16px; background: #fff0ed; border: 1px solid #f5d6cf; color: #a04a3c; border-radius: 9px; font-size: 13px; line-height: 1.6; }
+    .chat-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    .conversation { flex: 1; overflow-y: auto; padding: 20px 30px; scroll-behavior: smooth; }
+    .welcome { max-width: 760px; margin: min(11vh, 100px) auto 40px; }
+    .welcome-icon { width: 56px; height: 56px; display: grid; place-items: center; border: 1px solid #e0e4fb; background: linear-gradient(145deg, #f0f2ff, #fff); color: var(--accent); border-radius: 18px; margin-bottom: 26px; box-shadow: 0 6px 18px #4d5bdd09; }
+    .welcome-icon svg { width: 27px; height: 27px; }
+    .eyebrow { font-size: 11px; letter-spacing: 2px; font-weight: 600; color: #8d93ae; margin-bottom: 12px; }
+    h1 { font-size: clamp(25px, 3vw, 34px); line-height: 1.45; letter-spacing: -.7px; margin: 0 0 12px; font-weight: 650; }
+    .intro { font-size: 14px; color: #82879a; line-height: 1.9; margin: 0; }
+    .suggestions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 32px; }
+    .suggestion { text-align: left; padding: 19px 17px; border: 1px solid var(--line); background: white; border-radius: 12px; min-height: 116px; color: #434a64; }
+    .suggestion:hover { border-color: #bfc6f5; background: #fdfdff; }
+    .suggestion strong { display: block; font-size: 13px; font-weight: 600; margin-bottom: 11px; }
+    .suggestion span { color: #969bab; font-size: 12px; line-height: 1.7; }
+    .messages { max-width: 760px; margin: 0 auto; padding: 15px 0 25px; }
+    .message { display: flex; gap: 12px; margin: 24px 0; align-items: flex-start; }
+    .avatar { width: 30px; height: 30px; display: grid; place-items: center; background: #e9ecfd; color: #5862cd; border-radius: 9px; font-size: 11px; flex-shrink: 0; }
+    .message-body { min-width: 0; max-width: min(90%, 680px); }
+    .message-name { color: #9b9faf; font-size: 11px; margin: 2px 0 9px; }
+    .bubble { line-height: 1.85; font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .message.user { flex-direction: row-reverse; }
+    .user .avatar { display: none; }
+    .user .message-name { display: none; }
+    .user .bubble { padding: 12px 18px; background: #edf0ff; border: 1px solid #e5e9fd; border-radius: 14px 14px 4px 14px; }
+    .pending .bubble { color: #949ab0; }
+    .incomplete { display: block; color: #a77542; font-size: 11px; margin-top: 10px; }
+    .compose-area { padding: 12px 30px 20px; flex-shrink: 0; }
+    .composer { max-width: 760px; margin: 0 auto; background: white; border: 1px solid #dde1ee; border-radius: 15px; padding: 14px 16px 11px; box-shadow: 0 5px 22px #2e387008; }
+    .composer:focus-within { border-color: #a4adf4; box-shadow: 0 0 0 3px #525fe808; }
+    textarea { width: 100%; resize: none; outline: none; border: 0; background: transparent; color: #31364d; font-size: 14px; line-height: 1.7; padding: 0; }
+    textarea::placeholder { color: #a5a9b7; }
+    #chat-input { min-height: 49px; max-height: 180px; }
+    .compose-bottom { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .hint { color: #a1a6b7; font-size: 11px; }
+    .primary { border: 0; background: var(--accent); color: white; border-radius: 8px; padding: 10px 16px; font-size: 12px; display: inline-flex; gap: 7px; align-items: center; justify-content: center; }
+    .primary:hover:not(:disabled) { background: #4652d2; }
+    .primary svg { width: 15px; height: 15px; }
+    .footer-note { max-width: 760px; margin: 11px auto 0; text-align: center; color: #a7adbb; font-size: 10px; }
+    .extract-view { overflow-y: auto; padding: 48px 30px; }
+    .extract-inner { max-width: 760px; margin: 0 auto; }
+    .extract-form { background: white; margin-top: 28px; border: 1px solid var(--line); border-radius: 14px; padding: 23px; }
+    label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 16px; }
+    #extract-input { min-height: 135px; }
+    .text-button { border: 0; background: transparent; color: #6e78c2; font-size: 12px; padding: 8px 0; }
+    .result { background: white; border: 1px solid var(--line); border-radius: 14px; padding: 23px; margin-top: 22px; }
+    .result h2 { font-size: 14px; margin: 0 0 22px; }
+    dl { display: grid; grid-template-columns: 1fr 1fr 1.4fr; gap: 20px; margin: 0; }
+    dt { color: #969caf; font-size: 11px; margin-bottom: 10px; }
+    dd { color: #444c69; font-size: 14px; margin: 0; overflow-wrap: anywhere; }
+    details { margin-top: 24px; padding-top: 15px; border-top: 1px solid var(--line); font-size: 11px; color: #8d94aa; }
+    summary { cursor: pointer; }
+    pre { background: #f7f8fc; padding: 14px; border-radius: 8px; color: #525d7e; overflow-x: auto; }
+    @media (max-width: 760px) {
+      .app { grid-template-columns: 1fr; }
+      aside { display: none; }
+      header { height: 65px; padding: 0 18px; }
+      .breadcrumb > span { display: none; }
+      .mobile-tabs { display: flex; padding: 12px 18px 0; gap: 10px; }
+      .mobile-tabs button { border: 1px solid var(--line); border-radius: 7px; padding: 8px 12px; background: white; color: #8c92a5; font-size: 12px; }
+      .mobile-tabs .active { background: #edf0ff; color: var(--accent); border-color: #dfe4ff; }
+      .conversation { padding: 12px 20px; }
+      .welcome { margin: 32px auto; }
+      .suggestions { gap: 8px; }
+      .suggestion { padding: 14px 11px; min-height: 105px; }
+      .compose-area { padding: 8px 16px 16px; }
+      .hint { font-size: 10px; }
+      .extract-view { padding: 30px 20px; }
+      dl { grid-template-columns: 1fr; gap: 18px; }
+    }
+    @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; transition: none !important; } }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside>
+      <div class="brand"><span class="brandmark"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v11H9l-4 3V5Z"/><path d="M9 9h6M9 12h4"/></svg></span>智能客服</div>
+      <div class="side-label">工作空间</div>
+      <nav class="nav" aria-label="工作空间">
+        <button type="button" data-view="chat" class="active" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v12H9l-5 4V4Z"/><path d="M8 8h8M8 12h5"/></svg>客服对话</button>
+        <button type="button" data-view="extract" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h12v16H6zM9 3h6v4H9zM9 11h6M9 15h4"/></svg>售后提取</button>
+      </nav>
+      <div class="side-note"><strong>每一个问题，认真回应</strong>提供购买咨询与售后建议。<br>具体处理以商家实际政策为准。</div>
+    </aside>
+    <main>
+      <header>
+        <div class="breadcrumb"><span>工作台</span><span>/</span><b id="page-title">客服对话</b></div>
+        <button class="new-chat" type="button" id="new-chat"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>新对话</button>
+      </header>
+      <nav class="mobile-tabs" aria-label="功能切换">
+        <button type="button" data-view="chat" class="active" aria-pressed="true">客服对话</button>
+        <button type="button" data-view="extract" aria-pressed="false">售后提取</button>
+      </nav>
+      <div id="notice" class="notice" role="alert" hidden></div>
+      <section id="chat-view" class="chat-view" aria-label="客服对话">
+        <div class="conversation" id="conversation">
+          <div class="welcome" id="welcome">
+            <div class="welcome-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v12H9l-5 4V4Z"/><path d="M8 8h8M8 12h5"/></svg></div>
+            <div class="eyebrow">YOUR CUSTOMER ASSISTANT</div>
+            <h1>你好，有什么可以帮你？</h1>
+            <p class="intro">从一个问题开始。无论是购买咨询，还是售后困扰，<br>都可以在这里慢慢聊清楚。</p>
+            <div class="suggestions">
+              <button class="suggestion" type="button" data-prompt="收到的商品有破损，我想申请退款，应该怎么做？"><strong>商品出了问题 ↗</strong><span>了解退款与售后处理步骤</span></button>
+              <button class="suggestion" type="button" data-prompt="我想退货，需要先确认哪些信息？"><strong>了解退货流程 ↗</strong><span>梳理需要准备的信息</span></button>
+              <button class="suggestion" type="button" data-prompt="我叫小林，刚买的耳机有杂音。"><strong>说说你的情况 ↗</strong><span>接着上下文，继续沟通</span></button>
+            </div>
+          </div>
+          <div class="messages" id="messages" role="log" aria-label="对话记录" aria-live="polite" aria-relevant="additions text"></div>
+        </div>
+        <div class="compose-area">
+          <form class="composer" id="chat-form">
+            <textarea id="chat-input" rows="2" maxlength="32000" aria-label="输入消息" placeholder="描述你的问题，我来帮你梳理…"></textarea>
+            <div class="compose-bottom"><span class="hint" id="chat-status" role="status">Enter 发送 · Shift + Enter 换行</span><button type="submit" class="primary" id="send" disabled><span>发送</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 7-7 7 7M12 5v14"/></svg></button><button type="button" class="primary" id="stop" hidden>停止回复</button></div>
+          </form>
+          <div class="footer-note">回答仅供参考 · 无法直接查询订单或办理退款 · 刷新页面会开始新对话</div>
+        </div>
+      </section>
+      <section id="extract-view" class="extract-view" aria-label="售后提取" hidden>
+        <div class="extract-inner">
+          <div class="eyebrow">AFTER-SALES ASSISTANT</div>
+          <h1>把售后描述，整理清楚。</h1>
+          <p class="intro">提取订单号、诉求类型与期望方案，保留用户明确表达的信息。</p>
+          <form id="extract-form" class="extract-form">
+            <label for="extract-input">售后描述</label>
+            <textarea id="extract-input" rows="5" maxlength="32000" placeholder="例如：订单 A123 到货破损，希望换一个新的"></textarea>
+            <div class="compose-bottom"><button type="button" class="text-button" id="fill-example">填入示例</button><button class="primary" type="submit" id="extract-send" disabled>提取信息</button></div>
+          </form>
+          <div class="result" id="result" hidden aria-live="polite">
+            <h2>提取结果</h2>
+            <dl><div><dt>订单号</dt><dd id="order-id"></dd></div><div><dt>诉求类型</dt><dd id="request-type"></dd></div><div><dt>期望方案</dt><dd id="resolution"></dd></div></dl>
+            <details><summary>查看 JSON</summary><pre id="result-json"></pre></details>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script>
+    'use strict';
+    const $ = id => document.getElementById(id);
+    let sessionId = null, busy = false, controller = null, expired = false;
+    const initialStatus = 'Enter 发送 · Shift + Enter 换行';
+    function notice(message = '') { $('notice').textContent = message; $('notice').hidden = !message; }
+    function controls() {
+      $('send').disabled = busy || expired || !$('chat-input').value.trim();
+      $('extract-send').disabled = busy || !$('extract-input').value.trim();
+      $('new-chat').disabled = busy;
+      $('fill-example').disabled = busy;
+      document.querySelectorAll('[data-view], [data-prompt]').forEach(button => { button.disabled = busy; });
+    }
+    function showView(view) {
+      $('chat-view').hidden = view !== 'chat'; $('extract-view').hidden = view !== 'extract';
+      $('page-title').textContent = view === 'chat' ? '客服对话' : '售后提取';
+      document.querySelectorAll('[data-view]').forEach(button => { const active = button.dataset.view === view; button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active)); });
+      notice();
+    }
+    function scrollDown() { $('conversation').scrollTop = $('conversation').scrollHeight; }
+    function addMessage(role, text) {
+      const row = document.createElement('div'); row.className = 'message ' + role;
+      const avatar = document.createElement('div'); avatar.className = 'avatar'; avatar.textContent = '助';
+      const body = document.createElement('div'); body.className = 'message-body';
+      const name = document.createElement('div'); name.className = 'message-name'; name.textContent = role === 'user' ? '你' : '客服助手';
+      const bubble = document.createElement('div'); bubble.className = 'bubble'; bubble.textContent = text;
+      body.append(name, bubble); row.append(avatar, body); $('messages').append(row); scrollDown();
+      return { row, body, bubble };
+    }
+    async function post(path, payload, signal) {
+      const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        if (data.error?.code === 'SESSION_NOT_FOUND') { expired = true; throw new Error('会话已过期，请点击「新对话」重新开始。'); }
+        throw new Error(data.error?.message || '请求未成功，请稍后重试。');
+      }
+      return response;
+    }
+    async function consumeChat(response, onText) {
+      if (!response.headers.get('content-type')?.includes('text/event-stream') || !response.body) throw new Error('服务没有返回有效的对话流。');
+      const reader = response.body.getReader(), decoder = new TextDecoder();
+      let buffer = '', metaId = null, completed = false;
+      function parseBlock(block) {
+        let event = '', data = [];
+        for (const line of block.split(/\r?\n/)) {
+          if (line.startsWith('event:')) event = line.slice(6).trim();
+          if (line.startsWith('data:')) data.push(line.slice(5).trimStart());
+        }
+        if (!data.length) return;
+        const value = JSON.parse(data.join('\n'));
+        if (event === 'error') throw new Error(value.message || '回复未完成，请重试。');
+        if (event === 'meta') {
+          if (typeof value.session_id !== 'string' || (sessionId && value.session_id !== sessionId)) throw new Error('对话会话信息异常，请开始新对话。');
+          metaId = value.session_id; sessionId = metaId;
+        }
+        if (event === 'token' && typeof value.content === 'string') onText(value.content);
+        if (event === 'done') {
+          if (!metaId || value.session_id !== metaId) throw new Error('对话结束信息异常，请开始新对话。');
+          completed = true;
+        }
+      }
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
+          let boundary;
+          while ((boundary = /\r?\n\r?\n/.exec(buffer))) {
+            parseBlock(buffer.slice(0, boundary.index)); buffer = buffer.slice(boundary.index + boundary[0].length);
+          }
+          if (done) break;
+        }
+        if (!completed) throw new Error('连接提前结束，本轮回复未完成，请重试。');
+      } finally { reader.releaseLock(); }
+    }
+    $('chat-form').addEventListener('submit', async event => {
+      event.preventDefault(); const message = $('chat-input').value.trim();
+      if (!message || busy || expired) return;
+      busy = true; controller = new AbortController(); notice(); controls();
+      $('welcome').hidden = true; $('send').hidden = true; $('stop').hidden = false;
+      $('chat-status').textContent = '正在回复…';
+      addMessage('user', message);
+      const reply = addMessage('assistant', '正在思考…'); reply.row.classList.add('pending');
+      $('chat-input').value = ''; $('chat-input').style.height = '';
+      let answer = '';
+      try {
+        const payload = { message }; if (sessionId) payload.session_id = sessionId;
+        const response = await post('/api/chat', payload, controller.signal);
+        await consumeChat(response, text => { answer += text; reply.bubble.textContent = answer; reply.row.classList.remove('pending'); scrollDown(); });
+        if (!answer) throw new Error('模型没有返回正文，请重试。');
+      } catch (error) {
+        const stopped = controller.signal.aborted;
+        controller.abort();
+        reply.bubble.textContent = answer || (stopped ? '已停止回复。' : '暂时未能完成回复。');
+        const note = document.createElement('span'); note.className = 'incomplete'; note.textContent = '本轮未记入后续对话'; reply.body.append(note);
+        if (!stopped) notice(error instanceof TypeError ? '连接失败，请确认本地服务正在运行。' : error.message);
+        $('chat-input').value = message;
+      } finally {
+        reply.row.classList.remove('pending'); busy = false; controller = null;
+        $('send').hidden = false; $('stop').hidden = true; $('chat-status').textContent = initialStatus;
+        controls(); scrollDown(); $('chat-input').focus();
+      }
+    });
+    $('stop').addEventListener('click', () => controller?.abort());
+    $('chat-input').addEventListener('input', () => { $('chat-input').style.height = 'auto'; $('chat-input').style.height = Math.min($('chat-input').scrollHeight, 180) + 'px'; controls(); });
+    $('chat-input').addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) { event.preventDefault(); $('chat-form').requestSubmit(); } });
+    document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => showView(button.dataset.view)));
+    document.querySelectorAll('[data-prompt]').forEach(button => button.addEventListener('click', () => { $('chat-input').value = button.dataset.prompt; controls(); $('chat-input').focus(); }));
+    $('new-chat').addEventListener('click', () => {
+      sessionId = null; expired = false; $('messages').replaceChildren(); $('welcome').hidden = false;
+      $('chat-input').value = ''; $('chat-input').style.height = ''; showView('chat'); controls(); $('chat-input').focus();
+    });
+    $('extract-input').addEventListener('input', controls);
+    $('fill-example').addEventListener('click', () => { $('extract-input').value = '订单 A123 到货破损，希望换一个新的'; controls(); $('extract-input').focus(); });
+    $('extract-form').addEventListener('submit', async event => {
+      event.preventDefault(); const description = $('extract-input').value.trim(); if (!description || busy) return;
+      busy = true; notice(); controls(); $('result').hidden = true; $('extract-send').textContent = '正在提取…';
+      try {
+        const response = await post('/api/after-sales/extract', { description }); const data = await response.json();
+        const names = { refund: '仅退款', return_refund: '退货退款', exchange: '换货', repair: '维修', other: '其他 / 方式待定', unknown: '未明确诉求' };
+        $('order-id').textContent = data.order_id ?? '未提供'; $('request-type').textContent = names[data.request_type] ?? data.request_type;
+        $('resolution').textContent = data.expected_resolution ?? '未明确'; $('result-json').textContent = JSON.stringify(data, null, 2);
+        $('result').hidden = false;
+      } catch (error) { notice(error instanceof TypeError ? '连接失败，请确认本地服务正在运行。' : error.message); }
+      finally { busy = false; $('extract-send').textContent = '提取信息'; controls(); }
+    });
+  </script>
+</body>
+</html>
