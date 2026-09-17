@@ -1,0 +1,72 @@
+from __future__ import annotations
+
+import json
+
+from app.tools.business import ToolContext, build_registry
+from app.tools.executor import ToolExecutor, ToolOutcome
+
+
+async def execute(registry, name: str, args: dict, call_id: str = "call-1") -> ToolOutcome:
+    events = [
+        event
+        async for event in ToolExecutor().run(
+            {"name": name, "args": args, "id": call_id, "type": "tool_call"},
+            registry,
+            deadline=1e30,
+        )
+    ]
+    outcome = events[-1]
+    assert isinstance(outcome, ToolOutcome)
+    return outcome
+
+
+async def test_faq_does_not_rewrite_synonym(repos, new_turn) -> None:
+    _, faq, tickets = repos
+    ctx = ToolContext(new_turn, "demo", "邮费是多少", "TK-test")
+    registry = build_registry(ctx, faq, tickets)
+
+    result = await execute(registry, "query_faq", {"keyword": "运费"})
+
+    assert json.loads(result.message.content)["code"] == "INVALID_TOOL_ARGUMENTS"
+    assert result.attempt == 1
+
+
+async def test_faq_literal_synonym_reaches_sql_and_returns_not_found(
+    repos, new_turn
+) -> None:
+    _, faq, tickets = repos
+    ctx = ToolContext(new_turn, "demo", "邮费是多少", "TK-test")
+    registry = build_registry(ctx, faq, tickets)
+
+    result = await execute(registry, "query_faq", {"keyword": "邮费"})
+
+    payload = json.loads(result.message.content)
+    assert payload == {"status": "not_found", "data": []}
+    assert result.terminal_status == "not_found"
+
+
+async def test_faq_literal_match_returns_seed_row(repos, new_turn) -> None:
+    _, faq, tickets = repos
+    ctx = ToolContext(new_turn, "demo", "请问退货政策是什么", "TK-test")
+    registry = build_registry(ctx, faq, tickets)
+
+    result = await execute(registry, "query_faq", {"keyword": "退货政策"})
+
+    payload = json.loads(result.message.content)
+    assert payload["status"] == "ok"
+    assert [row["question"] for row in payload["data"]] == ["退货政策"]
+
+
+async def test_create_ticket_is_idempotent_for_context_ticket_number(
+    repos, new_turn
+) -> None:
+    _, faq, tickets = repos
+    ctx = ToolContext(new_turn, "demo", "收到的商品损坏了", "TK-idempotent")
+    registry = build_registry(ctx, faq, tickets)
+    args = {"issue_description": "收到的商品损坏了", "ticket_type": "repair"}
+
+    first = await execute(registry, "create_ticket", args, "ticket-1")
+    second = await execute(registry, "create_ticket", args, "ticket-2")
+
+    assert json.loads(first.message.content)["data"]["ticket_no"] == "TK-idempotent"
+    assert json.loads(second.message.content) == json.loads(first.message.content)

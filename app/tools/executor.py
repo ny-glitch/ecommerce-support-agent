@@ -1,0 +1,263 @@
+from __future__ import annotations
+
+import asyncio
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
+import json
+import time
+from typing import Any
+
+from langchain_core.messages import ToolMessage
+from pydantic import ValidationError
+from sqlalchemy.exc import (
+    DBAPIError,
+    IntegrityError,
+    InterfaceError,
+    OperationalError,
+    TimeoutError as SQLAlchemyTimeoutError,
+)
+
+from app.errors import ServiceError
+from app.tools.registry import ToolRegistry
+from app.tools.results import InvalidToolArguments, TransientToolError, bounded_result
+
+
+@dataclass(frozen=True)
+class ToolProgress:
+    name: str
+    tool_call_id: str
+    status: str
+    attempt: int
+    message: str
+
+
+@dataclass(frozen=True)
+class ToolOutcome:
+    message: ToolMessage
+    terminal_status: str
+    attempt: int
+
+
+class ToolExecutor:
+    def __init__(self, timeout_seconds: float = 5, max_attempts: int = 2) -> None:
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
+        if max_attempts not in (1, 2):
+            raise ValueError("max_attempts must be 1 or 2")
+        self.timeout_seconds = timeout_seconds
+        self.max_attempts = max_attempts
+
+    @staticmethod
+    def _outcome(
+        call_id: str,
+        name: str,
+        payload: dict[str, Any],
+        terminal_status: str,
+        attempt: int,
+    ) -> ToolOutcome:
+        content = bounded_result(payload)
+        return ToolOutcome(
+            ToolMessage(
+                content=content,
+                tool_call_id=call_id,
+                name=name or None,
+                status="error" if terminal_status == "failed" else "success",
+            ),
+            terminal_status,
+            attempt,
+        )
+
+    @staticmethod
+    def _database_code(error: DBAPIError) -> int | None:
+        args = getattr(error.orig, "args", ())
+        if args and isinstance(args[0], int):
+            return args[0]
+        return None
+
+    @classmethod
+    def _is_transient(cls, error: BaseException) -> bool:
+        if isinstance(error, TransientToolError | SQLAlchemyTimeoutError):
+            return True
+        if isinstance(error, IntegrityError):
+            return False
+        if isinstance(error, DBAPIError) and error.connection_invalidated:
+            return True
+        if isinstance(error, OperationalError | InterfaceError):
+            return cls._database_code(error) in {
+                1205,
+                1213,
+                2002,
+                2003,
+                2006,
+                2013,
+                2055,
+            }
+        return False
+
+    @classmethod
+    def _successful_outcome(
+        cls, call_id: str, name: str, raw_message: object, attempt: int
+    ) -> ToolOutcome:
+        if isinstance(raw_message, ToolMessage):
+            raw_content = raw_message.content
+        else:
+            raw_content = raw_message
+        if not isinstance(raw_content, str):
+            return cls._outcome(
+                call_id,
+                name,
+                {"status": "error", "code": "INVALID_TOOL_RESULT"},
+                "failed",
+                attempt,
+            )
+        try:
+            payload = json.loads(raw_content)
+        except (json.JSONDecodeError, TypeError):
+            return cls._outcome(
+                call_id,
+                name,
+                {"status": "error", "code": "INVALID_TOOL_RESULT"},
+                "failed",
+                attempt,
+            )
+        if not isinstance(payload, dict) or payload.get("status") not in {
+            "ok",
+            "not_found",
+            "error",
+        }:
+            return cls._outcome(
+                call_id,
+                name,
+                {"status": "error", "code": "INVALID_TOOL_RESULT"},
+                "failed",
+                attempt,
+            )
+        terminal_status = {
+            "ok": "succeeded",
+            "not_found": "not_found",
+            "error": "failed",
+        }[payload["status"]]
+        return cls._outcome(call_id, name, payload, terminal_status, attempt)
+
+    async def run(
+        self, call: dict, registry: ToolRegistry, *, deadline: float
+    ) -> AsyncIterator[ToolProgress | ToolOutcome]:
+        call_id = str(call.get("id", ""))
+        name = call.get("name")
+        name = name if isinstance(name, str) else ""
+        business_tool = registry.get(name)
+        if business_tool is None:
+            yield self._outcome(
+                call_id,
+                name,
+                {"status": "error", "code": "UNKNOWN_TOOL"},
+                "failed",
+                0,
+            )
+            return
+        if not isinstance(call.get("args"), dict):
+            yield self._outcome(
+                call_id,
+                name,
+                {"status": "error", "code": "INVALID_TOOL_ARGUMENTS"},
+                "failed",
+                0,
+            )
+            return
+
+        for attempt in range(1, self.max_attempts + 1):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                yield self._outcome(
+                    call_id,
+                    name,
+                    {"status": "error", "code": "TOOL_DEADLINE_EXCEEDED"},
+                    "failed",
+                    attempt - 1,
+                )
+                return
+
+            yield ToolProgress(
+                name=name,
+                tool_call_id=call_id,
+                status="running" if attempt == 1 else "retrying",
+                attempt=attempt,
+                message="工具正在执行" if attempt == 1 else "工具正在重试",
+            )
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                yield self._outcome(
+                    call_id,
+                    name,
+                    {"status": "error", "code": "TOOL_DEADLINE_EXCEEDED"},
+                    "failed",
+                    attempt,
+                )
+                return
+
+            try:
+                async with asyncio.timeout(min(self.timeout_seconds, remaining)):
+                    raw_message = await business_tool.ainvoke(call)
+            except asyncio.CancelledError:
+                raise
+            except (ValidationError, InvalidToolArguments):
+                yield self._outcome(
+                    call_id,
+                    name,
+                    {"status": "error", "code": "INVALID_TOOL_ARGUMENTS"},
+                    "failed",
+                    attempt,
+                )
+                return
+            except TimeoutError:
+                deadline_expired = time.monotonic() >= deadline
+                if deadline_expired:
+                    yield self._outcome(
+                        call_id,
+                        name,
+                        {"status": "error", "code": "TOOL_DEADLINE_EXCEEDED"},
+                        "failed",
+                        attempt,
+                    )
+                    return
+                if attempt == self.max_attempts:
+                    yield self._outcome(
+                        call_id,
+                        name,
+                        {"status": "error", "code": "TOOL_TIMEOUT"},
+                        "failed",
+                        attempt,
+                    )
+                    return
+                continue
+            except ServiceError as error:
+                yield self._outcome(
+                    call_id,
+                    name,
+                    {"status": "error", "code": error.code},
+                    "failed",
+                    attempt,
+                )
+                return
+            except Exception as error:
+                if self._is_transient(error):
+                    if time.monotonic() >= deadline:
+                        code = "TOOL_DEADLINE_EXCEEDED"
+                    elif attempt < self.max_attempts:
+                        continue
+                    else:
+                        code = "TOOL_TEMPORARY_FAILURE"
+                else:
+                    code = "TOOL_EXECUTION_FAILED"
+                yield self._outcome(
+                    call_id,
+                    name,
+                    {"status": "error", "code": code},
+                    "failed",
+                    attempt,
+                )
+                return
+
+            yield self._successful_outcome(call_id, name, raw_message, attempt)
+            return

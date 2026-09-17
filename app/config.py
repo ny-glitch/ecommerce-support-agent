@@ -12,6 +12,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 PositiveInt = Annotated[int, Field(gt=0)]
+ToolAttempts = Literal[1, 2]
 _HTTP_URL_ADAPTER = TypeAdapter(HttpUrl)
 
 
@@ -37,6 +38,8 @@ class Settings(BaseSettings):
     session_ttl_seconds: PositiveInt = 3600
     max_sessions: PositiveInt = 100
     request_timeout_seconds: PositiveInt = 60
+    tool_timeout_seconds: PositiveInt = 5
+    tool_max_attempts: ToolAttempts = 2
 
     @field_validator("llm_base_url")
     @classmethod
