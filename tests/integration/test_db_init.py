@@ -3,8 +3,8 @@ from __future__ import annotations
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import inspect, select, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import func, inspect, select, text
+from sqlalchemy.exc import DBAPIError
 
 
 TABLE_NAMES = ("faq", "conversations", "messages", "tickets")
@@ -56,7 +56,7 @@ async def test_mysql_rejects_invalid_role_and_unknown_conversation(mysql_db) -> 
             )
         )
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises(DBAPIError):
         async with mysql_db.sessions.begin() as session:
             session.add(
                 Message(
@@ -68,7 +68,7 @@ async def test_mysql_rejects_invalid_role_and_unknown_conversation(mysql_db) -> 
                 )
             )
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises(DBAPIError):
         async with mysql_db.sessions.begin() as session:
             session.add(
                 Message(
@@ -79,6 +79,19 @@ async def test_mysql_rejects_invalid_role_and_unknown_conversation(mysql_db) -> 
                     turn_status="completed",
                 )
             )
+
+    async with mysql_db.sessions() as session:
+        invalid_count = (
+            await session.execute(
+                select(func.count(Message.id)).where(
+                    Message.turn_id.in_(
+                        ("bad-role-turn", "missing-conversation-turn")
+                    )
+                )
+            )
+        ).scalar_one()
+
+    assert invalid_count == 0
 
 
 @pytest.mark.asyncio
