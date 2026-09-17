@@ -14,9 +14,17 @@ from app.errors import ServiceError
 REQUIRED_ENV_NAMES = ("LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY")
 
 
+@pytest.fixture(autouse=True)
+def isolate_settings_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    for field_name in Settings.model_fields:
+        monkeypatch.delenv(field_name, raising=False)
+        monkeypatch.delenv(field_name.upper(), raising=False)
+
+
 @pytest.fixture
 def settings() -> Settings:
     return Settings(
+        _env_file=None,
         llm_base_url="https://api.example.com/v1",
         llm_model="example-chat-model",
         llm_api_key="test-key",
@@ -65,6 +73,7 @@ def test_load_settings_reads_dotenv_and_environment_wins(
 
 def test_settings_defaults_include_cross_provider_token_field() -> None:
     result = Settings(
+        _env_file=None,
         llm_base_url="http://localhost:11434/v1",
         llm_model="local-model",
         llm_api_key="unused",
@@ -105,7 +114,7 @@ def test_settings_rejects_invalid_urls_token_fields_and_budgets(
     values.update(overrides)
 
     with pytest.raises(ValidationError) as exc_info:
-        Settings(**values)
+        Settings(_env_file=None, **values)
 
     assert "input_value=" not in str(exc_info.value)
 
@@ -131,6 +140,7 @@ def test_validation_errors_hide_raw_input_values() -> None:
 
     with pytest.raises(ValidationError) as exc_info:
         Settings(
+            _env_file=None,
             llm_base_url="https://api.example.com/v1",
             llm_model="model",
             llm_api_key="secret-key",
