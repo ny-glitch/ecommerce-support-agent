@@ -63,7 +63,7 @@
 | 补充提取 | 6/6 | 三字段自动严格比对 |
 | 最终客服 | 9/9 | 主控AI逐条语义评阅，依据下表；不是脚本自动评分或用户签署 |
 | 最终评估请求错误 | 0 | 真实HTTP/SSE协议检查 |
-| 离线全套回归 | 92 passed，1 warning，11.41秒 | 完成测试隔离后，当前代码与最终Prompt树；pytest |
+| 离线全套回归 | 92 passed，1 warning，11.52秒 | 完成混合大小写隔离修复后，带虚构污染变量验证当前代码与最终Prompt树；pytest |
 | 依赖一致性 | 通过 | pip check：No broken requirements found |
 
 客服最终逐条评阅：
