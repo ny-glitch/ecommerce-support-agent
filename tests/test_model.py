@@ -21,11 +21,7 @@ from app.schemas import AfterSalesResult, ChatRequest, ExtractRequest
 
 
 @pytest.fixture
-def settings(monkeypatch: pytest.MonkeyPatch) -> Settings:
-    for field_name in Settings.model_fields:
-        monkeypatch.delenv(field_name, raising=False)
-        monkeypatch.delenv(field_name.upper(), raising=False)
-
+def settings() -> Settings:
     return Settings(
         _env_file=None,
         llm_base_url="https://upstream.example/v1",

@@ -14,13 +14,6 @@ from app.errors import ServiceError
 REQUIRED_ENV_NAMES = ("LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY")
 
 
-@pytest.fixture(autouse=True)
-def isolate_settings_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    for field_name in Settings.model_fields:
-        monkeypatch.delenv(field_name, raising=False)
-        monkeypatch.delenv(field_name.upper(), raising=False)
-
-
 @pytest.fixture
 def settings() -> Settings:
     return Settings(
