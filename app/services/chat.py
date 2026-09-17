@@ -40,6 +40,7 @@ class PreparedTurn:
     _parts: list[str] = field(default_factory=list, repr=False)
     _iterators: list = field(default_factory=list, repr=False)
     _operations: set[asyncio.Task] = field(default_factory=set, repr=False)
+    _mutations: set[asyncio.Task] = field(default_factory=set, repr=False)
     _started: bool = field(default=False, repr=False)
     _stream_started: bool = field(default=False, repr=False)
     _finalized: bool = field(default=False, repr=False)
@@ -48,7 +49,7 @@ class PreparedTurn:
 
 async def _bounded(
     factory: Callable[[], Awaitable[T]], deadline: float,
-    operations: set[asyncio.Task],
+    operations: set[asyncio.Task], *, mutations: set[asyncio.Task] | None = None,
 ) -> T:
     # Each scope enters/exits in the same Task; never hold a timeout over yield.
     if asyncio.get_running_loop().time() >= deadline:
@@ -58,11 +59,15 @@ async def _bounded(
 
     def finished(task: asyncio.Task) -> None:
         operations.discard(task)
+        if mutations is not None:
+            mutations.discard(task)
         if not task.cancelled():
             task.exception()  # Also retrieve failures after the consumer has left.
 
     task = asyncio.create_task(invoke())
     operations.add(task)
+    if mutations is not None:
+        mutations.add(task)
     task.add_done_callback(finished)
     try:
         async with asyncio.timeout_at(deadline):
@@ -139,12 +144,14 @@ class ChatService:
                 await _bounded(
                     lambda: self.conversations.create(ref.conversation_id, user_id),
                     deadline, prepared._operations,
+                    mutations=prepared._mutations,
                 )
             # A commit may succeed before its acknowledgment is cancelled.
             prepared._started = True
             await _bounded(
                 lambda: self.conversations.start_turn(ref, user_id, message), deadline,
                 prepared._operations,
+                mutations=prepared._mutations,
             )
             yield prepared
         except (asyncio.CancelledError, GeneratorExit):
@@ -171,6 +178,11 @@ class ChatService:
                 logger.warning("chat cleanup failed: stream_close")
 
         async def finish():
+            # Never compete with a write whose cancellation/commit is still
+            # unwinding. If it cannot settle within the shared cleanup grace
+            # period, leave the audit unresolved instead of starting a write.
+            if prepared._mutations:
+                await asyncio.gather(*tuple(prepared._mutations), return_exceptions=True)
             if prepared._started and not prepared._finalized:
                 try:
                     await self.conversations.finish_turn(
@@ -247,6 +259,7 @@ class ChatService:
                 await _bounded(
                     lambda: self.conversations.append_call(prepared.ref, decision),
                     prepared.deadline, prepared._operations,
+                    mutations=prepared._mutations,
                 )
                 execution = self.executor.run(calls[0], prepared.registry, deadline=prepared.deadline)
                 prepared._iterators.append(execution)
@@ -261,6 +274,7 @@ class ChatService:
                         await _bounded(
                             lambda: self.conversations.append_result(prepared.ref, event.message),
                             prepared.deadline, prepared._operations,
+                            mutations=prepared._mutations,
                         )
                         current_tool_messages = [decision, event.message]
                         progress = ToolProgress(
@@ -296,6 +310,7 @@ class ChatService:
             await _bounded(
                 lambda: self.conversations.finish_turn(prepared.ref, content, "completed"),
                 prepared.deadline, prepared._operations,
+                mutations=prepared._mutations,
             )
             prepared._finalized = True
             yield ChatEvent("done", {"session_id": prepared.ref.conversation_id})

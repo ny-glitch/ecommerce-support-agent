@@ -343,3 +343,66 @@ async def test_blocked_upstream_finally_cannot_hold_audit_or_guard(chat_harness,
             await asyncio.wait_for(task, 1)
         except asyncio.CancelledError:
             pass
+
+
+@pytest.mark.parametrize("settles", [True, False])
+async def test_cancelled_completion_write_settles_before_audit_cleanup(chat_harness, settles):
+    h = chat_harness
+    completing = asyncio.Event()
+    unwinding = asyncio.Event()
+    release_write = asyncio.Event()
+    write_settled = asyncio.Event()
+    cleanup_started = asyncio.Event()
+    ordering = []
+    session_ids = []
+
+    async def controlled_finish(ref, content, status):
+        if status == "completed":
+            completing.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                unwinding.set()
+                await release_write.wait()
+                write_settled.set()
+                ordering.append("write_settled")
+        else:
+            cleanup_started.set()
+            ordering.append("cleanup_finish")
+            assert write_settled.is_set(), "cleanup raced an unsettled database write"
+            h.conversations.finished_status = status
+
+    h.conversations.finish_turn = controlled_finish
+
+    async def consume():
+        async with h.service.prepare("你好", None) as prepared:
+            session_ids.append(prepared.ref.conversation_id)
+            return [event async for event in h.service.stream(prepared)]
+
+    task = asyncio.create_task(consume())
+    try:
+        await asyncio.wait_for(completing.wait(), 1)
+        task.cancel()
+        await asyncio.wait_for(unwinding.wait(), 1)
+        await asyncio.sleep(0.03)
+        assert not cleanup_started.is_set(), "audit cleanup began before DB write settled"
+        if settles:
+            release_write.set()
+        done, _ = await asyncio.wait({task}, timeout=1.2)
+        assert task in done, "unsettled database write held the request guard"
+        with pytest.raises(asyncio.CancelledError):
+            task.result()
+        if settles:
+            assert ordering == ["write_settled", "cleanup_finish"]
+            assert h.conversations.finished_status == "cancelled"
+        else:
+            assert not cleanup_started.is_set()
+            assert h.conversations.finished_status is None
+        h.guard.acquire(session_ids[0])
+        h.guard.release(session_ids[0])
+    finally:
+        release_write.set()
+        try:
+            await asyncio.wait_for(task, 1)
+        except asyncio.CancelledError:
+            pass
