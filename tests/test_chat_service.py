@@ -283,3 +283,63 @@ async def test_prepare_read_uses_total_deadline_and_releases_guard(chat_harness)
     assert not any(op[0] == "user" for op in h.conversations.operations)
     h.guard.acquire("existing")
     h.guard.release("existing")
+
+
+@pytest.mark.parametrize("stop", ["cancel", "deadline"])
+async def test_blocked_upstream_finally_cannot_hold_audit_or_guard(chat_harness, stop):
+    h = chat_harness
+    waiting = asyncio.Event()
+    closing = asyncio.Event()
+    close_gate = asyncio.Event()
+    closed = asyncio.Event()
+    session_ids = []
+
+    async def blocked_stream(messages):
+        try:
+            yield "已收到的部分回答"
+            waiting.set()
+            await asyncio.Event().wait()
+        finally:
+            closing.set()
+            try:
+                # Ordinary asynchronous resource close, with no cancellation suppression.
+                await close_gate.wait()
+            finally:
+                closed.set()
+
+    h.gateway.stream = blocked_stream
+
+    async def consume():
+        async with h.service.prepare("你好", None) as prepared:
+            session_ids.append(prepared.ref.conversation_id)
+            if stop == "deadline":
+                prepared.deadline = time.monotonic() + 0.04
+            return [event async for event in h.service.stream(prepared)]
+
+    task = asyncio.create_task(consume())
+    try:
+        await asyncio.wait_for(waiting.wait(), 1)
+        if stop == "cancel":
+            task.cancel()
+        await asyncio.wait_for(closing.wait(), 1)
+        done, _ = await asyncio.wait({task}, timeout=1.2)
+        assert task in done, "blocked finally kept the request and its guard alive"
+        expected = "cancelled" if stop == "cancel" else "failed"
+        assert h.conversations.finish_calls[0][1:] == ("已收到的部分回答", expected)
+        assert len(h.conversations.finish_calls) == 1
+        h.guard.acquire(session_ids[0])
+        h.guard.release(session_ids[0])
+        if stop == "cancel":
+            with pytest.raises(asyncio.CancelledError):
+                task.result()
+        else:
+            events = task.result()
+            assert events[-1].data["code"] == "UPSTREAM_TIMEOUT"
+            assert not any(event.name == "done" for event in events)
+        await asyncio.wait_for(closed.wait(), 0.2)
+    finally:
+        close_gate.set()
+        try:
+            await asyncio.wait_for(task, 1)
+        except asyncio.CancelledError:
+            pass

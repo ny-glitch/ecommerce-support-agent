@@ -39,18 +39,39 @@ class PreparedTurn:
     message: str
     _parts: list[str] = field(default_factory=list, repr=False)
     _iterators: list = field(default_factory=list, repr=False)
+    _operations: set[asyncio.Task] = field(default_factory=set, repr=False)
     _started: bool = field(default=False, repr=False)
     _stream_started: bool = field(default=False, repr=False)
     _finalized: bool = field(default=False, repr=False)
     _cleanup_started: bool = field(default=False, repr=False)
 
 
-async def _bounded(factory: Callable[[], Awaitable[T]], deadline: float) -> T:
+async def _bounded(
+    factory: Callable[[], Awaitable[T]], deadline: float,
+    operations: set[asyncio.Task],
+) -> T:
     # Each scope enters/exits in the same Task; never hold a timeout over yield.
     if asyncio.get_running_loop().time() >= deadline:
         raise TimeoutError
-    async with asyncio.timeout_at(deadline):
+    async def invoke() -> T:
         return await factory()
+
+    def finished(task: asyncio.Task) -> None:
+        operations.discard(task)
+        if not task.cancelled():
+            task.exception()  # Also retrieve failures after the consumer has left.
+
+    task = asyncio.create_task(invoke())
+    operations.add(task)
+    task.add_done_callback(finished)
+    try:
+        async with asyncio.timeout_at(deadline):
+            return await asyncio.shield(task)
+    except (asyncio.CancelledError, TimeoutError):
+        # A cancelled operation may await resource close in its finally block.
+        # Let bounded cleanup own that unwind instead of blocking this consumer.
+        task.cancel()
+        raise
 
 
 def _safe_error(error: Exception) -> ServiceError:
@@ -97,31 +118,33 @@ class ChatService:
             window = build_tool_context(
                 prompt, [], message, self.settings, tool_schemas=registry.schemas()
             )
+            prepared = PreparedTurn(ref, deadline, window, registry, message)
             if session_id is not None:
                 owner = await _bounded(
-                    lambda: self.conversations.get(session_id, user_id), deadline
+                    lambda: self.conversations.get(session_id, user_id), deadline,
+                    prepared._operations,
                 )
                 if owner is None:
                     raise ServiceError("CONVERSATION_NOT_FOUND", "会话不存在", 404)
                 history = await _bounded(
                     lambda: self.conversations.history(
                         session_id, user_id, self.settings.max_history_turns
-                    ), deadline,
+                    ), deadline, prepared._operations,
                 )
-                window = build_tool_context(
+                prepared.window = build_tool_context(
                     prompt, history, message, self.settings,
                     tool_schemas=registry.schemas(),
                 )
             else:
                 await _bounded(
                     lambda: self.conversations.create(ref.conversation_id, user_id),
-                    deadline,
+                    deadline, prepared._operations,
                 )
-            prepared = PreparedTurn(ref, deadline, window, registry, message)
             # A commit may succeed before its acknowledgment is cancelled.
             prepared._started = True
             await _bounded(
-                lambda: self.conversations.start_turn(ref, user_id, message), deadline
+                lambda: self.conversations.start_turn(ref, user_id, message), deadline,
+                prepared._operations,
             )
             yield prepared
         except (asyncio.CancelledError, GeneratorExit):
@@ -160,8 +183,13 @@ class ChatService:
 
         async def cleanup_work():
             # Closing one stalled upstream must not prevent the audit attempt.
-            jobs = [asyncio.create_task(close(it)) for it in prepared._iterators]
-            jobs.append(asyncio.create_task(finish()))
+            async def drain_and_close():
+                # Do not call aclose while its anext is still unwinding.
+                if prepared._operations:
+                    await asyncio.gather(*tuple(prepared._operations), return_exceptions=True)
+                await asyncio.gather(*(close(it) for it in prepared._iterators))
+
+            jobs = [asyncio.create_task(drain_and_close()), asyncio.create_task(finish())]
             try:
                 await asyncio.gather(*jobs)
             finally:
@@ -180,7 +208,10 @@ class ChatService:
         with CancelScope(shield=True):
             while not task.done():
                 try:
-                    await _bounded(lambda: asyncio.shield(task), deadline)
+                    # Shield the cleanup task itself; do not create another
+                    # operation task owned by the cleanup being awaited.
+                    async with asyncio.timeout_at(deadline):
+                        await asyncio.shield(task)
                 except TimeoutError:
                     task.cancel()
                     logger.warning("chat cleanup failed: timeout")
@@ -206,7 +237,7 @@ class ChatService:
             })
             decision = await _bounded(
                 lambda: self.gateway.select(prepared.window.messages, prepared.registry.tools),
-                prepared.deadline,
+                prepared.deadline, prepared._operations,
             )
             calls = decision.tool_calls
             if decision.invalid_tool_calls or len(calls) > 1 or any(not call.get("id") for call in calls):
@@ -215,19 +246,21 @@ class ChatService:
             if calls:
                 await _bounded(
                     lambda: self.conversations.append_call(prepared.ref, decision),
-                    prepared.deadline,
+                    prepared.deadline, prepared._operations,
                 )
                 execution = self.executor.run(calls[0], prepared.registry, deadline=prepared.deadline)
                 prepared._iterators.append(execution)
                 while True:
                     try:
-                        event = await _bounded(lambda: anext(execution), prepared.deadline)
+                        event = await _bounded(
+                            lambda: anext(execution), prepared.deadline, prepared._operations
+                        )
                     except StopAsyncIteration:
                         break
                     if isinstance(event, ToolOutcome):
                         await _bounded(
                             lambda: self.conversations.append_result(prepared.ref, event.message),
-                            prepared.deadline,
+                            prepared.deadline, prepared._operations,
                         )
                         current_tool_messages = [decision, event.message]
                         progress = ToolProgress(
@@ -249,7 +282,9 @@ class ChatService:
             prepared._iterators.append(upstream)
             while True:
                 try:
-                    text = await _bounded(lambda: anext(upstream), prepared.deadline)
+                    text = await _bounded(
+                        lambda: anext(upstream), prepared.deadline, prepared._operations
+                    )
                 except StopAsyncIteration:
                     break
                 if text:
@@ -260,7 +295,7 @@ class ChatService:
                 raise ServiceError("UPSTREAM_INCOMPLETE", "模型回复未正常完成，请重试", 502)
             await _bounded(
                 lambda: self.conversations.finish_turn(prepared.ref, content, "completed"),
-                prepared.deadline,
+                prepared.deadline, prepared._operations,
             )
             prepared._finalized = True
             yield ChatEvent("done", {"session_id": prepared.ref.conversation_id})
