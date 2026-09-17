@@ -153,7 +153,7 @@ def create_app(
             error = exc if isinstance(exc, ServiceError) else _upstream_error()
             yield _event("error", {"code": error.code, "message": error.message})
 
-    @app.post("/api/extract", response_model=AfterSalesResult)
+    @app.post("/api/after-sales/extract", response_model=AfterSalesResult)
     async def extract(body: ExtractRequest, request: Request) -> AfterSalesResult:
         try:
             async with asyncio.timeout(request.app.state.settings.request_timeout_seconds):

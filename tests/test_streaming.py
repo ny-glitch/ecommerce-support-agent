@@ -144,7 +144,7 @@ async def test_stalled_extraction_returns_safe_timeout_error():
     async with running_server(app) as client:
         try:
             async with asyncio.timeout(3):
-                response = await client.post("/api/extract", json={"description": "hi"})
+                response = await client.post("/api/after-sales/extract", json={"description": "hi"})
             assert response.status_code == 504
             assert response.json()["error"]["code"] == "UPSTREAM_TIMEOUT"
             assert gateway.stream_closed.is_set()

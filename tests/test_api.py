@@ -150,7 +150,7 @@ def test_idle_ttl_expires_but_busy_session_survives():
 def test_extraction_returns_validated_result_without_creating_session():
     app, gateway = make_app(max_sessions=1)
     with TestClient(app) as client:
-        response = client.post("/api/extract", json={"description": "  订单 ORDER-17，我要退款  "})
+        response = client.post("/api/after-sales/extract", json={"description": "  订单 ORDER-17，我要退款  "})
         assert response.status_code == 200
         assert response.json() == {"order_id": "ORDER-17", "request_type": "refund", "expected_resolution": "原路退款"}
         assert gateway.descriptions == ["订单 ORDER-17，我要退款"]
@@ -162,7 +162,7 @@ def test_extraction_errors_are_safe_http_errors(error, code, status):
     app, gateway = make_app()
     gateway.extraction_error = error
     with TestClient(app) as client:
-        response = client.post("/api/extract", json={"description": "hi"})
+        response = client.post("/api/after-sales/extract", json={"description": "hi"})
         assert response.status_code == status
         assert response.json()["error"]["code"] == code
         assert "secret-key" not in response.text
@@ -171,7 +171,7 @@ def test_extraction_errors_are_safe_http_errors(error, code, status):
 def test_invalid_extraction_does_not_echo_user_input():
     app, gateway = make_app()
     with TestClient(app) as client:
-        response = client.post("/api/extract", json={"description": "secret-user-input", "extra": True})
+        response = client.post("/api/after-sales/extract", json={"description": "secret-user-input", "extra": True})
         assert response.status_code == 422
         assert "secret-user-input" not in response.text
         assert gateway.descriptions == []
