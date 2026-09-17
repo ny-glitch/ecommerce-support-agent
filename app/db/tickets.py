@@ -37,6 +37,33 @@ def _ticket_dto(ticket: Ticket) -> dict:
     }
 
 
+async def _load_idempotency_state(
+    session: AsyncSession,
+    ticket_no: str,
+    conversation_id: str,
+    user_id: str,
+    issue_description: str,
+    ticket_type: str,
+) -> tuple[Conversation, Ticket | None]:
+    conversation = (
+        await session.execute(
+            select(Conversation).where(
+                Conversation.id == conversation_id,
+                Conversation.user_id == user_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if conversation is None:
+        raise _conversation_not_found()
+
+    ticket = await session.get(Ticket, ticket_no)
+    if ticket is not None and not _same_ticket(
+        ticket, conversation_id, issue_description, ticket_type
+    ):
+        raise _ticket_conflict()
+    return conversation, ticket
+
+
 class TicketRepository:
     def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
         self._sessions = sessions
@@ -51,23 +78,15 @@ class TicketRepository:
     ) -> dict:
         try:
             async with self._sessions.begin() as session:
-                conversation = (
-                    await session.execute(
-                        select(Conversation).where(
-                            Conversation.id == conversation_id,
-                            Conversation.user_id == user_id,
-                        )
-                    )
-                ).scalar_one_or_none()
-                if conversation is None:
-                    raise _conversation_not_found()
-
-                ticket = await session.get(Ticket, ticket_no)
+                conversation, ticket = await _load_idempotency_state(
+                    session,
+                    ticket_no,
+                    conversation_id,
+                    user_id,
+                    issue_description,
+                    ticket_type,
+                )
                 if ticket is not None:
-                    if not _same_ticket(
-                        ticket, conversation_id, issue_description, ticket_type
-                    ):
-                        raise _ticket_conflict()
                     conversation.status = "human_pending"
                     return _ticket_dto(ticket)
 
@@ -85,23 +104,15 @@ class TicketRepository:
             # A unique-key race or uncertain commit leaves the failed Session
             # unusable. Verify the durable outcome in a new short transaction.
             async with self._sessions.begin() as session:
-                ticket = (
-                    await session.execute(
-                        select(Ticket)
-                        .join(
-                            Conversation,
-                            Conversation.id == Ticket.conversation_id,
-                        )
-                        .where(
-                            Ticket.ticket_no == ticket_no,
-                            Conversation.user_id == user_id,
-                        )
-                    )
-                ).scalar_one_or_none()
-                if ticket is not None:
-                    if not _same_ticket(
-                        ticket, conversation_id, issue_description, ticket_type
-                    ):
-                        raise _ticket_conflict()
-                    return _ticket_dto(ticket)
-            raise
+                conversation, ticket = await _load_idempotency_state(
+                    session,
+                    ticket_no,
+                    conversation_id,
+                    user_id,
+                    issue_description,
+                    ticket_type,
+                )
+                if ticket is None:
+                    raise
+                conversation.status = "human_pending"
+                return _ticket_dto(ticket)

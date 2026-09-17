@@ -13,6 +13,62 @@ from app.db.models import Conversation, Message, Ticket
 from app.errors import ServiceError
 
 
+def injected_db_error() -> DBAPIError:
+    return DBAPIError(
+        statement=None,
+        params=None,
+        orig=RuntimeError("simulated database commit uncertainty"),
+    )
+
+
+class RollbackThenRaise:
+    def __init__(self, transaction) -> None:
+        self._transaction = transaction
+
+    async def __aenter__(self):
+        return await self._transaction.__aenter__()
+
+    async def __aexit__(self, exc_type, exc_value, traceback):
+        if exc_value is not None:
+            return await self._transaction.__aexit__(
+                exc_type, exc_value, traceback
+            )
+        error = injected_db_error()
+        await self._transaction.__aexit__(type(error), error, error.__traceback__)
+        raise error
+
+
+class RaiseOnEnter:
+    async def __aenter__(self):
+        raise injected_db_error()
+
+    async def __aexit__(self, exc_type, exc_value, traceback):
+        return False
+
+
+class FailureInjectingSessions:
+    def __init__(
+        self,
+        sessions,
+        *,
+        fail_on_exit: set[int] | None = None,
+        fail_on_enter: set[int] | None = None,
+    ) -> None:
+        self._sessions = sessions
+        self._fail_on_exit = fail_on_exit or set()
+        self._fail_on_enter = fail_on_enter or set()
+        self._begin_count = 0
+
+    def begin(self):
+        self._begin_count += 1
+        if self._begin_count in self._fail_on_enter:
+            return RaiseOnEnter()
+        transaction = self._sessions.begin()
+        if self._begin_count in self._fail_on_exit:
+            return RollbackThenRaise(transaction)
+        return transaction
+
+
 def tool_call(call_id: str = "call-1") -> AIMessage:
     return AIMessage(
         content="",
@@ -255,6 +311,118 @@ async def test_ticket_write_failure_rolls_back_conversation_status(repos, new_tu
     assert conversation is not None
     assert conversation.status == "open"
     assert ticket is None
+
+
+@pytest.mark.asyncio
+async def test_ticket_recovery_restores_conversation_status_before_success(
+    new_turn, mysql_db
+) -> None:
+    from app.db.tickets import TicketRepository
+
+    async with mysql_db.sessions.begin() as session:
+        session.add(
+            Ticket(
+                ticket_no="TICKET-RECOVER",
+                conversation_id=new_turn.conversation_id,
+                issue_description="恢复幂等状态",
+                ticket_type="other",
+                status="pending",
+            )
+        )
+    tickets = TicketRepository(
+        FailureInjectingSessions(mysql_db.sessions, fail_on_exit={1})
+    )
+
+    result = await tickets.create_once(
+        "TICKET-RECOVER",
+        new_turn.conversation_id,
+        "demo",
+        "恢复幂等状态",
+        "other",
+    )
+
+    async with mysql_db.sessions.begin() as session:
+        conversation = await session.get(Conversation, new_turn.conversation_id)
+    assert result["ticket_no"] == "TICKET-RECOVER"
+    assert conversation is not None
+    assert conversation.status == "human_pending"
+
+
+@pytest.mark.asyncio
+async def test_ticket_recovery_normalizes_cross_user_primary_key_conflict(
+    new_turn, mysql_db
+) -> None:
+    from app.db.tickets import TicketRepository
+
+    other_conversation_id = str(uuid4())
+    async with mysql_db.sessions.begin() as session:
+        session.add(
+            Conversation(
+                id=other_conversation_id,
+                user_id="other",
+                status="open",
+            )
+        )
+        await session.flush()
+        session.add(
+            Ticket(
+                ticket_no="TICKET-CROSS-USER",
+                conversation_id=other_conversation_id,
+                issue_description="其他用户的问题",
+                ticket_type="other",
+                status="pending",
+            )
+        )
+    tickets = TicketRepository(
+        FailureInjectingSessions(mysql_db.sessions, fail_on_enter={1})
+    )
+
+    with pytest.raises(ServiceError) as exc_info:
+        await tickets.create_once(
+            "TICKET-CROSS-USER",
+            new_turn.conversation_id,
+            "demo",
+            "当前用户的问题",
+            "other",
+        )
+
+    assert exc_info.value.code == "TICKET_CONFLICT"
+    assert exc_info.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_ticket_recovery_commit_failure_does_not_report_success(
+    new_turn, mysql_db
+) -> None:
+    from app.db.tickets import TicketRepository
+
+    async with mysql_db.sessions.begin() as session:
+        session.add(
+            Ticket(
+                ticket_no="TICKET-RECOVERY-FAILS",
+                conversation_id=new_turn.conversation_id,
+                issue_description="恢复提交仍然失败",
+                ticket_type="other",
+                status="pending",
+            )
+        )
+    tickets = TicketRepository(
+        FailureInjectingSessions(mysql_db.sessions, fail_on_exit={1, 2})
+    )
+
+    with pytest.raises(DBAPIError):
+        await tickets.create_once(
+            "TICKET-RECOVERY-FAILS",
+            new_turn.conversation_id,
+            "demo",
+            "恢复提交仍然失败",
+            "other",
+        )
+
+    async with mysql_db.sessions.begin() as session:
+        conversation = await session.get(Conversation, new_turn.conversation_id)
+    assert conversation is not None
+    assert conversation.status == "open"
 
 
 @pytest.mark.asyncio
