@@ -1,0 +1,128 @@
+from __future__ import annotations
+
+from importlib import import_module, util
+
+from pydantic import SecretStr
+from sqlalchemy import CheckConstraint
+from sqlalchemy.pool import NullPool
+
+from app.config import Settings
+
+
+EXPECTED_COLUMNS = {
+    "faq": {"id", "question", "answer", "category"},
+    "conversations": {"id", "user_id", "status", "created_at"},
+    "messages": {
+        "id",
+        "conversation_id",
+        "turn_id",
+        "role",
+        "content",
+        "tool_calls",
+        "tool_call_id",
+        "turn_status",
+        "created_at",
+    },
+    "tickets": {
+        "ticket_no",
+        "conversation_id",
+        "issue_description",
+        "ticket_type",
+        "status",
+        "created_at",
+    },
+}
+
+
+def load_db_module(name: str):
+    package = util.find_spec("app.db")
+    assert package is not None, "app.db package must provide the database layer"
+    return import_module(f"app.db.{name}")
+
+
+def make_settings(**overrides: object) -> Settings:
+    values: dict[str, object] = {
+        "_env_file": None,
+        "llm_base_url": "https://api.example.com/v1",
+        "llm_model": "example-chat-model",
+        "llm_api_key": "test-key",
+    }
+    values.update(overrides)
+    return Settings(**values)
+
+
+def test_exact_business_tables_and_columns() -> None:
+    Base = load_db_module("models").Base
+
+    assert set(Base.metadata.tables) == set(EXPECTED_COLUMNS)
+    assert {
+        name: set(table.columns.keys())
+        for name, table in Base.metadata.tables.items()
+    } == EXPECTED_COLUMNS
+
+
+def test_required_fields_constraints_foreign_keys_and_indexes() -> None:
+    Base = load_db_module("models").Base
+    tables = Base.metadata.tables
+
+    assert all(not column.nullable for column in tables["faq"].columns)
+    assert all(not column.nullable for column in tables["conversations"].columns)
+    assert {
+        column.name for column in tables["messages"].columns if column.nullable
+    } == {"tool_calls", "tool_call_id"}
+    assert all(not column.nullable for column in tables["tickets"].columns)
+
+    assert {
+        table_name: {
+            (foreign_key.parent.name, foreign_key.target_fullname)
+            for foreign_key in tables[table_name].foreign_keys
+        }
+        for table_name in ("messages", "tickets")
+    } == {
+        "messages": {("conversation_id", "conversations.id")},
+        "tickets": {("conversation_id", "conversations.id")},
+    }
+
+    check_names = {
+        constraint.name
+        for table in tables.values()
+        for constraint in table.constraints
+        if isinstance(constraint, CheckConstraint)
+    }
+    assert check_names == {
+        "ck_conversations_status",
+        "ck_messages_role",
+        "ck_messages_turn_status",
+        "ck_tickets_status",
+    }
+
+    message_indexes = {
+        tuple(column.name for column in index.columns)
+        for index in tables["messages"].indexes
+    }
+    assert message_indexes == {
+        ("conversation_id", "id"),
+        ("conversation_id", "turn_id"),
+    }
+
+
+def test_database_test_mode_uses_null_pool() -> None:
+    Database = load_db_module("database").Database
+
+    db = Database(
+        "mysql+asyncmy://support_test:unused@127.0.0.1:13307/support_test",
+        test_mode=True,
+    )
+
+    assert isinstance(db.engine.pool, NullPool)
+
+
+def test_database_url_is_optional_and_secret() -> None:
+    assert make_settings().database_url is None
+
+    settings = make_settings(
+        database_url="mysql+asyncmy://support:password@127.0.0.1:3307/support"
+    )
+
+    assert isinstance(settings.database_url, SecretStr)
+    assert "password" not in repr(settings)

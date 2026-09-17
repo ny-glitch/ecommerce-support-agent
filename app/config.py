@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     llm_base_url: str
     llm_model: str
     llm_api_key: SecretStr
+    database_url: SecretStr | None = None
     llm_token_limit_param: Literal["max_tokens", "max_completion_tokens"] = (
         "max_completion_tokens"
     )

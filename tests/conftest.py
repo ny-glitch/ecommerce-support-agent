@@ -7,6 +7,15 @@ import pytest
 from app.config import Settings
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--require-mysql",
+        action="store_true",
+        default=False,
+        help="fail instead of skipping when the isolated MySQL test database is absent",
+    )
+
+
 @pytest.fixture(autouse=True)
 def isolate_settings_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     field_names = {field_name.casefold() for field_name in Settings.model_fields}
