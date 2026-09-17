@@ -41,8 +41,18 @@ class EvaluationHandler(BaseHTTPRequestHandler):
             session_id = body.get("session_id") or "11111111-1111-4111-8111-111111111111"
             self.sessions.setdefault(session_id, []).append(body["message"])
             answer = "你叫小林，耳机有杂音。" if len(self.sessions[session_id]) == 2 else "请提供订单号。"
+            reported_session_id = session_id
+            done_session_id = session_id
+            if self.chat_mode == "invalid_uuid":
+                reported_session_id = "not-a-uuid"
+                done_session_id = reported_session_id
+            elif self.chat_mode == "mismatched_done":
+                done_session_id = "22222222-2222-4222-8222-222222222222"
+            elif self.chat_mode == "changed_meta" and body.get("session_id"):
+                reported_session_id = "33333333-3333-4333-8333-333333333333"
+                done_session_id = reported_session_id
             meta = (
-                f'event: meta\ndata: {{"session_id":"{session_id}","estimated_input_tokens":8,'
+                f'event: meta\ndata: {{"session_id":"{reported_session_id}","estimated_input_tokens":8,'
                 '"token_count_is_estimate":true,"dropped_turns":0}\n\n'
             )
             if self.chat_mode == "stream_error":
@@ -53,7 +63,7 @@ class EvaluationHandler(BaseHTTPRequestHandler):
                 events_text = (
                     meta
                     + f'event: token\ndata: {json.dumps({"content": answer}, ensure_ascii=False)}\n\n'
-                    + f'event: done\ndata: {{"session_id":"{session_id}"}}\n\n'
+                    + f'event: done\ndata: {{"session_id":"{done_session_id}"}}\n\n'
                 )
             events = events_text.encode()
             self.send_response(200)
@@ -220,6 +230,39 @@ def test_cli_counts_malformed_or_error_responses_as_failures(tmp_path, evaluatio
     if description == "触发错误":
         assert report["summary"]["http_failures"] == 1
         assert report["results"][0]["error"]["type"] == "http_error"
+
+
+@pytest.mark.parametrize(
+    ("mode", "turns"),
+    [
+        ("invalid_uuid", ["你好"]),
+        ("mismatched_done", ["你好"]),
+        ("changed_meta", ["我叫小林", "我叫什么？"]),
+    ],
+)
+def test_cli_rejects_invalid_or_inconsistent_session_metadata(
+    tmp_path, evaluation_server, mode, turns
+):
+    EvaluationHandler.chat_mode = mode
+    cases = {
+        "extraction": [],
+        "chat": [
+            {
+                "id": mode,
+                "turns": turns,
+                "manual_rubric": ["只在完整且一致的会话协议后进入人工评审"],
+            }
+        ],
+    }
+
+    completed, report = run_cli(tmp_path, evaluation_server, cases)
+
+    assert completed.returncode == 1
+    assert report["status"] == "failed"
+    assert report["summary"]["chat_pending_manual_review"] == 0
+    assert report["summary"]["http_failures"] == 1
+    assert report["results"][0]["status"] == "failed"
+    assert report["results"][0]["error"]["type"] == "protocol_error"
 
 
 def run_demo(base_url):

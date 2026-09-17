@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from typing import Any
 from urllib import error, request
+from uuid import UUID
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -120,14 +121,25 @@ def _chat_turn(
     if stream_error is not None:
         code = stream_error.get("code", "UNKNOWN") if isinstance(stream_error, dict) else "UNKNOWN"
         raise RequestFailure("stream_error", f"聊天流返回 error 事件：{code}")
-    if not isinstance(meta, dict) or not isinstance(meta.get("session_id"), str) or done is None:
+    if not isinstance(meta, dict) or not isinstance(meta.get("session_id"), str):
         raise RequestFailure("protocol_error", "聊天流缺少 meta 或 done 事件")
+    returned_session_id = meta["session_id"]
+    try:
+        UUID(returned_session_id)
+    except ValueError as exc:
+        raise RequestFailure("protocol_error", "聊天流 meta 包含无效 session_id") from exc
+    if (
+        not isinstance(done, dict)
+        or done.get("session_id") != returned_session_id
+        or (session_id is not None and returned_session_id != session_id)
+    ):
+        raise RequestFailure("protocol_error", "聊天流 session_id 不一致")
     answer_parts = [
         data["content"]
         for name, data in events
         if name == "token" and isinstance(data, dict) and isinstance(data.get("content"), str)
     ]
-    return meta["session_id"], "".join(answer_parts)
+    return returned_session_id, "".join(answer_parts)
 
 
 def _validate_cases(cases: Any) -> dict[str, list[dict[str, Any]]]:
