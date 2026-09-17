@@ -3,16 +3,15 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-from app.context import Turn
 from app.errors import ServiceError
-from helpers import RecordingGateway, parse_sse, settings
+from helpers import http_app, parse_sse, settings, stored_turn
 
 
 def make_app(**overrides):
-    from app.main import create_app
-
-    gateway = RecordingGateway()
-    return create_app(settings(**overrides), gateway), gateway
+    app, gateway, conversations, service = http_app(settings(**overrides))
+    app.test_conversations = conversations
+    app.test_service = service
+    return app, gateway
 
 
 def test_chat_reuses_complete_turns_and_returns_readable_sse():
@@ -73,14 +72,15 @@ def test_session_http_unknown_busy_and_capacity_errors():
         unknown = client.post("/api/chat", json={"message": "hi", "session_id": str(uuid4())})
         assert unknown.status_code == 404
         assert unknown.json()["error"]["code"] == "SESSION_NOT_FOUND"
-        session = app.state.sessions.acquire(None)
-        busy = client.post("/api/chat", json={"message": "hi", "session_id": session.id})
+        sid = app.test_conversations.seed()
+        app.test_service.guard.acquire(sid)
+        busy = client.post("/api/chat", json={"message": "hi", "session_id": sid})
         assert busy.status_code == 409
         assert busy.json()["error"]["code"] == "SESSION_BUSY"
         full = client.post("/api/chat", json={"message": "hi"})
         assert full.status_code == 503
         assert full.json()["error"]["code"] == "SESSION_CAPACITY"
-        app.state.sessions.release(session)
+        app.test_service.guard.release(sid)
 
 
 @pytest.mark.parametrize("failure,code", [(RuntimeError("secret-key raw upstream body"), "UPSTREAM_ERROR"), (ServiceError("UPSTREAM_INCOMPLETE", "模型回复未正常完成，请重试", 502), "UPSTREAM_INCOMPLETE")])
@@ -119,32 +119,8 @@ def test_history_retention_is_bounded():
             response = client.post("/api/chat", json={"message": message, "session_id": sid})
             sid = parse_sse(response.text)[0]["data"]["session_id"]
         assert [m.content for m in gateway.calls[-1]][1:] == ["second", "你好，小林", "third", "你好，小林", "fourth"]
-        session = app.state.sessions.acquire(sid)
-        assert [t.user for t in session.turns] == ["third", "fourth"]
-        app.state.sessions.release(session)
-
-
-def test_idle_ttl_expires_but_busy_session_survives():
-    from app.sessions import SessionStore
-
-    now = [0.0]
-    store = SessionStore(settings(session_ttl_seconds=10, max_sessions=2), clock=lambda: now[0])
-    idle, busy = store.acquire(None), store.acquire(None)
-    store.commit(idle, [Turn("u", "a")])
-    store.release(idle)
-    now[0] = 10.0
-    with pytest.raises(ServiceError) as expired:
-        store.acquire(idle.id)
-    assert expired.value.status_code == 404
-    with pytest.raises(ServiceError) as occupied:
-        store.acquire(busy.id)
-    assert occupied.value.status_code == 409
-    replacement = store.acquire(None)
-    store.commit(busy, [Turn("busy", "completed")])
-    store.release(busy)
-    now[0] = 19.0
-    assert store.acquire(busy.id).turns == [Turn("busy", "completed")]
-    store.release(replacement)
+        # Durable history keeps all audits; only the model window is bounded.
+        assert len(app.test_conversations.records[sid]["turns"]) == 4
 
 
 def test_extraction_returns_validated_result_without_creating_session():
@@ -177,35 +153,26 @@ def test_invalid_extraction_does_not_echo_user_input():
         assert gateway.descriptions == []
 
 
-def test_expired_session_returns_http_404():
-    from app.sessions import SessionStore
-
-    app, gateway = make_app(session_ttl_seconds=10)
+def test_completed_conversations_do_not_consume_active_capacity():
+    app, _ = make_app(max_sessions=1, session_ttl_seconds=1)
     with TestClient(app) as client:
-        now = [0.0]
-        app.state.sessions = SessionStore(app.state.settings, clock=lambda: now[0])
-        first = client.post("/api/chat", json={"message": "old"})
-        sid = parse_sse(first.text)[0]["data"]["session_id"]
-        now[0] = 10.0
-        expired = client.post("/api/chat", json={"message": "next", "session_id": sid})
-        assert expired.status_code == 404
-        assert expired.json()["error"]["code"] == "SESSION_NOT_FOUND"
-        assert len(gateway.calls) == 1
+        ids = []
+        for _ in range(3):
+            response = client.post("/api/chat", json={"message": "hi"})
+            assert response.status_code == 200
+            ids.append(parse_sse(response.text)[0]["data"]["session_id"])
+        assert client.post("/api/chat", json={"message": "again", "session_id": ids[0]}).status_code == 200
 
 
 def test_budget_trimming_is_reported_and_failed_attempt_keeps_original_history():
     app, gateway = make_app()
     with TestClient(app) as client:
-        session = app.state.sessions.acquire(None)
-        original = [Turn("长" * 2000, "旧答案"), Turn("recent", "recent answer")]
-        app.state.sessions.commit(session, original)
-        app.state.sessions.release(session)
+        original = [stored_turn("长" * 2000, "旧答案"), stored_turn("recent", "recent answer")]
+        sid = app.test_conversations.seed(original)
         gateway.error = RuntimeError("failure")
-        response = client.post("/api/chat", json={"message": "再" * 1000, "session_id": session.id})
+        response = client.post("/api/chat", json={"message": "再" * 1000, "session_id": sid})
         events = parse_sse(response.text)
         assert events[0]["data"]["dropped_turns"] == 1
         assert events[-1]["event"] == "error"
         assert [m.content for m in gateway.calls[-1]][1:-1] == ["recent", "recent answer"]
-        stored = app.state.sessions.acquire(session.id)
-        assert stored.turns == original
-        app.state.sessions.release(stored)
+        assert app.test_conversations.records[sid]["turns"] == original

@@ -8,9 +8,7 @@ import httpx
 import pytest
 import uvicorn
 
-from app.context import Turn
-from app.main import create_app
-from helpers import GatedGateway, parse_sse, settings
+from helpers import GatedGateway, http_app, parse_sse, settings, stored_turn
 
 
 @asynccontextmanager
@@ -58,7 +56,7 @@ async def next_event(lines):
 
 async def test_first_token_arrives_before_upstream_is_allowed_to_finish():
     gateway = GatedGateway()
-    app = create_app(settings(), gateway)
+    app, _, conversations, service = http_app(settings(), gateway)
     async with running_server(app) as client:
         try:
             async with client.stream("POST", "/api/chat", json={"message": "hi"}) as response:
@@ -81,14 +79,11 @@ async def test_first_token_arrives_before_upstream_is_allowed_to_finish():
 @pytest.mark.parametrize("asgi_spec", [None, "2.4"], ids=["uvicorn-native", "asgi-2.4"])
 async def test_idle_disconnect_closes_upstream_releases_session_and_preserves_history(existing, asgi_spec):
     gateway = GatedGateway()
-    app = create_app(settings(max_sessions=1), gateway)
+    app, _, conversations, service = http_app(settings(max_sessions=1), gateway)
     async with running_server(app, asgi_spec) as client:
         sid = None
         if existing:
-            session = app.state.sessions.acquire(None)
-            sid = session.id
-            app.state.sessions.commit(session, [Turn("old", "old answer")])
-            app.state.sessions.release(session)
+            sid = conversations.seed([stored_turn("old", "old answer")])
         try:
             async with client.stream("POST", "/api/chat", json={"message": "cancelled", "session_id": sid}) as response:
                 lines = response.aiter_lines()
@@ -101,6 +96,9 @@ async def test_idle_disconnect_closes_upstream_releases_session_and_preserves_hi
             # The gateway is still blocked. Disconnect alone must release resources.
             await asyncio.wait_for(gateway.stream_closed.wait(), 1)
             assert not gateway.completed
+            async with asyncio.timeout(1.5):
+                while service.guard._active:
+                    await asyncio.sleep(0.01)
             gateway.resume.set()
             retry = await client.post("/api/chat", json={"message": "retry", "session_id": sid})
             assert retry.status_code == 200
@@ -114,7 +112,7 @@ async def test_idle_disconnect_closes_upstream_releases_session_and_preserves_hi
 
 async def test_stalled_stream_times_out_without_committing_partial_turn():
     gateway = GatedGateway()
-    app = create_app(settings(request_timeout_seconds=1, max_sessions=1), gateway)
+    app, _, conversations, service = http_app(settings(request_timeout_seconds=1, max_sessions=1), gateway)
     async with running_server(app) as client:
         try:
             async with asyncio.timeout(3):
@@ -125,6 +123,9 @@ async def test_stalled_stream_times_out_without_committing_partial_turn():
             assert not any(e["event"] == "done" for e in events)
             assert gateway.stream_closed.is_set()
             assert not gateway.completed
+            async with asyncio.timeout(1.5):
+                while service.guard._active:
+                    await asyncio.sleep(0.01)
             gateway.resume.set()
             assert (await client.post("/api/chat", json={"message": "new"})).status_code == 200
         finally:
@@ -140,7 +141,7 @@ async def test_stalled_extraction_returns_safe_timeout_error():
                 self.stream_closed.set()
 
     gateway = StalledExtraction()
-    app = create_app(settings(request_timeout_seconds=1), gateway)
+    app, _, conversations, service = http_app(settings(request_timeout_seconds=1), gateway)
     async with running_server(app) as client:
         try:
             async with asyncio.timeout(3):
