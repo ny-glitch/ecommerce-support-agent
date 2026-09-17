@@ -56,6 +56,12 @@ class ToolExecutor:
         attempt: int,
     ) -> ToolOutcome:
         content = bounded_result(payload)
+        final_status = json.loads(content).get("status")
+        terminal_status = {
+            "ok": "succeeded",
+            "not_found": "not_found",
+            "error": "failed",
+        }.get(final_status, terminal_status)
         return ToolOutcome(
             ToolMessage(
                 content=content,

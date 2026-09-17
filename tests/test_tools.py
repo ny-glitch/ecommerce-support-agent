@@ -191,6 +191,17 @@ async def test_ticket_retries_with_same_server_context() -> None:
     )
 
 
+async def test_ticket_type_is_stripped_before_literal_validation() -> None:
+    payload = await invoke(
+        "create_ticket",
+        {"issue_description": "  需要退款  ", "ticket_type": "  refund  "},
+        message="需要退款",
+    )
+
+    assert payload["status"] == "ok"
+    assert payload["data"]["ticket_no"] == "TK-17"
+
+
 def test_bounded_result_is_valid_utf8_json_and_preserves_essential_fields() -> None:
     result = bounded_result(
         {

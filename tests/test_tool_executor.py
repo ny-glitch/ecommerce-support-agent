@@ -216,6 +216,24 @@ async def test_executor_bounds_even_nonconforming_tool_output() -> None:
     assert payload["truncated"] is True
 
 
+async def test_irreducible_success_payload_becomes_failed_outcome() -> None:
+    @tool(args_schema=NoArgs)
+    async def irreducible() -> str:
+        """Return an identifier too large to preserve within the output limit."""
+        return json.dumps({"status": "ok", "order_id": "x" * 5_000})
+
+    outcome = (await collect(ToolExecutor(), irreducible))[-1]
+
+    assert isinstance(outcome, ToolOutcome)
+    assert json.loads(outcome.message.content) == {
+        "status": "error",
+        "code": "TOOL_RESULT_TOO_LARGE",
+        "truncated": True,
+    }
+    assert outcome.terminal_status == "failed"
+    assert outcome.message.status == "error"
+
+
 @pytest.mark.parametrize(
     ("exception", "expected_calls"),
     [

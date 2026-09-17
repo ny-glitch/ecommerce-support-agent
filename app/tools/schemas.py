@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 OrderId = Annotated[
@@ -46,3 +46,8 @@ class FaqInput(ToolInput):
 class TicketInput(ToolInput):
     issue_description: IssueDescription
     ticket_type: TicketType
+
+    @field_validator("ticket_type", mode="before")
+    @classmethod
+    def strip_ticket_type(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
