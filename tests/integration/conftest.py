@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from uuid import uuid4
 
 import pytest
 import pytest_asyncio
@@ -9,6 +10,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
+
+from app.db.contracts import TurnRef
 
 
 class MySQLTestSettings(BaseSettings):
@@ -73,3 +76,26 @@ async def mysql_db(request: pytest.FixtureRequest) -> AsyncIterator[object]:
         if schema_ready:
             await clear_business_rows(db)
         await db.aclose()
+
+
+@pytest_asyncio.fixture
+async def repos(mysql_db):
+    from app.db.conversations import ConversationRepository
+    from app.db.faq import FaqRepository
+    from app.db.seed import seed_database
+    from app.db.tickets import TicketRepository
+
+    await seed_database(mysql_db)
+    return (
+        ConversationRepository(mysql_db.sessions),
+        FaqRepository(mysql_db.sessions),
+        TicketRepository(mysql_db.sessions),
+    )
+
+
+@pytest_asyncio.fixture
+async def new_turn(repos) -> TurnRef:
+    conversations, _, _ = repos
+    ref = TurnRef(conversation_id=str(uuid4()), turn_id=str(uuid4()))
+    await conversations.create(ref.conversation_id, "demo")
+    return ref
