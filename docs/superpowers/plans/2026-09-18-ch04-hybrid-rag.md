@@ -35,7 +35,7 @@
 
 Context7 本轮已查 FlagEmbedding dense/score 接口、PyMilvus schema/AnnSearchRequest/Strong/upsert、SQLAlchemy unsigned BIGINT/ON UPDATE/短事务。并只读核对 PyMilvus v2.6.17 源码：MilvusClient.hybrid_search 的参数名为 ranker，AnnSearchRequest 支持 expr/expr_params；expr 与 filter 不同时传。
 
-Milvus v2.6.23 仓库 Compose 模板仍写 milvus:v2.6.22，实施显式改为 v2.6.23；etcd v3.5.25 和 MinIO RELEASE.2024-05-28T17-19-04Z 取自该模板。Docker Hub 清单请求曾超时，镜像架构和实际运行仍是 Task 4 的验收项。
+Milvus v2.6.23 仓库 Compose 模板仍写 milvus:v2.6.22，实施显式改为 v2.6.23；etcd v3.5.25 和 MinIO RELEASE.2024-05-28T17-19-04Z 取自该模板。执行预检已成功拉取三个 ARM64 镜像；MinIO 的 Docker Hub 仓库不可用，按同版本官方 README 使用 quay.io/minio/minio:RELEASE.2024-05-28T17-19-04Z（组件与版本不变）。实际运行仍是 Task 4 的验收项。
 
 ## 文件和任务依赖
 
@@ -93,7 +93,7 @@ class RankedChunk:
     score: float
 ```
 
-- [ ] **Step 1：写原文边界与真实数据库 RED。** `tests/ch04_helpers.py` 的 `make_chunk(**changes)` 返回 `dataclasses.replace(KnowledgeChunk(910001,'数码配件/充电器','C65-Pro 支持什么协议？','支持 PD 3.0。','商品手册/C65-Pro/协议','manual'),**changes)`。mysql_db fixture 清理顺序增加 low_confidence_questions、qa_extraction_staging，并先将 knowledge_chunks 的 prev/next 置 NULL 再 DELETE，最后才清理原四表。更新“只有四表”的旧断言为七表，同时保留原四表字段约束检查。
+- [x] **Step 1：写原文边界与真实数据库 RED。** `tests/ch04_helpers.py` 的 `make_chunk(**changes)` 返回 `dataclasses.replace(KnowledgeChunk(910001,'数码配件/充电器','C65-Pro 支持什么协议？','支持 PD 3.0。','商品手册/C65-Pro/协议','manual'),**changes)`。mysql_db fixture 清理顺序增加 low_confidence_questions、qa_extraction_staging，并先将 knowledge_chunks 的 prev/next 置 NULL 再 DELETE，最后才清理原四表。更新“只有四表”的旧断言为七表，同时保留原四表字段约束检查。
 
 ```python
 from dataclasses import replace
@@ -122,7 +122,7 @@ async def test_seed_and_conditional_done(mysql_db):
 
 Run: `.venv/bin/python -m pytest tests/test_knowledge_text.py tests/integration/test_knowledge_repository.py --require-mysql -q`。预期先因缺少新模块/方法而失败，保留 RED 输出。
 
-- [ ] **Step 2：最小实现七表与仓储。** KnowledgeChunkRecord/QAExtractionStaging 的字段与规格附录逐项对齐，中文 comment 完整保留；updated_at 用 `server_default=text('CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP')`，不是仅设置 Python onupdate。app/db/__init__.py 先导入现有 models 再导入 knowledge_models，保证任何入口导入 Base 都已注册七表，knowledge_models 只向 models 单向导入 Base。源指纹使用排序 JSON 的 UTF-8 SHA256，字段集合显式列出；不 hash ORM 对象或状态列。
+- [x] **Step 2：最小实现七表与仓储。** KnowledgeChunkRecord/QAExtractionStaging 的字段与规格附录逐项对齐，中文 comment 完整保留；updated_at 用 `server_default=text('CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP')`，不是仅设置 Python onupdate。app/db/__init__.py 先导入现有 models 再导入 knowledge_models，保证任何入口导入 Base 都已注册七表，knowledge_models 只向 models 单向导入 Base。源指纹使用排序 JSON 的 UTF-8 SHA256，字段集合显式列出；不 hash ORM 对象或状态列。
 
 ```python
 import hashlib
@@ -141,8 +141,8 @@ def source_hash(chunk):
 
 insert_seed 使用单次短事务做全批冲突核验、插入原文、设置指针；已有 ID 内容不同则整批回滚，不覆盖。record_once 校验 ref 会话存在，唯一键竞争后使用新 Session 回读同一记录；不得用会话存在代替轮次原话匹配。数据库异常对外脱敏。
 
-- [ ] **Step 3：GREEN 与 DDL 实证。** 重跑 RED 命令及现有数据库测试；真实 Inspector/SHOW CREATE TABLE 核对 unsigned、自引用 ON DELETE SET NULL、ENUM、ON UPDATE、utf8mb4 和中文注释。测试删除前块导致相邻指针置空、批量冲突不部分导入、同轮重复入池只一行、已变原文不能误标 done。
-- [ ] **Step 4：评审、留痕、提交。** 完成规格/代码质量评审后记录实际命令、结果和返工，提交 `feat: add authoritative knowledge storage and refusal pool`。
+- [x] **Step 3：GREEN 与 DDL 实证。** 重跑 RED 命令及现有数据库测试；真实 Inspector/SHOW CREATE TABLE 核对 unsigned、自引用 ON DELETE SET NULL、ENUM、ON UPDATE、utf8mb4 和中文注释。测试删除前块导致相邻指针置空、批量冲突不部分导入、同轮重复入池只一行、已变原文不能误标 done。
+- [x] **Step 4：评审、留痕、提交。** 完成规格/代码质量评审后记录实际命令、结果和返工，提交 `feat: add authoritative knowledge storage and refusal pool`。
 
 ## Task 2：可溯源的演示资料与独立标注集
 
