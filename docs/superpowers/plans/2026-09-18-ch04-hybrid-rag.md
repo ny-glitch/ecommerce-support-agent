@@ -150,7 +150,7 @@ insert_seed 使用单次短事务做全批冲突核验、插入原文、设置�
 
 **Interfaces:** `load_corpus(path:Path)->list[KnowledgeChunk]`；`validate_corpus(chunks)->list[str]` 返回错误列表；`load_cases(path:Path)->list[dict]`，case 字段为 query_id/query/category/relevant_chunk_ids/reference_answer/answerable/query_type/difficulty/rationale。`corpus_fingerprint(chunks)->str` 将 ID 与 source_hash 按 ID 排序后 hash。
 
-- [ ] **Step 1：先建标注样例与数据评审表。** 本任务纯资料的 TDD 替代为标注验证：四商品类各24+通用24，ID 为 910001..910120，manifest 将 source_key/source_document/ID 映射固定。每类资料独立成章；不把同义词扩展成新条目。正式六桶各十条；校准五个可回答桶各四条+无答案十条；两个集合 query_id 和原话不重合。
+- [x] **Step 1：先建标注样例与数据评审表。** 本任务纯资料的 TDD 替代为标注验证：四商品类各24+通用24，ID 为 910001..910120，manifest 将 source_key/source_document/ID 映射固定。每类资料独立成章；不把同义词扩展成新条目。正式六桶各十条；校准五个可回答桶各四条+无答案十条；两个集合 query_id 和原话不重合。
 
 ```json
 {"query_id":"test-model-01","query":"C65-Pro 能用 PD 3.0 吗？","category":"数码配件/充电器","relevant_chunk_ids":[910001],"reference_answer":"C65-Pro 支持 PD 3.0。","answerable":true,"query_type":"model","difficulty":"easy","rationale":"型号和协议均在 910001 原文中明确出现。"}
@@ -158,7 +158,7 @@ insert_seed 使用单次短事务做全批冲突核验、插入原文、设置�
 
 该条必须对应实际原文；其余条目逐条标注，不用脚本把一个问句替换序号生成60条。型号、近似型号、售后条件、跨块证据和未知内容都需人工阅读验证。记录原文内容冲突、缺少条件及重写过程。
 
-- [ ] **Step 2：为导入校验写 RED 后实现。** 只对可单测的加载/冲突校验写测试，资料答案质量不写字符串包含式单测。
+- [x] **Step 2：为导入校验写 RED 后实现。** 只对可单测的加载/冲突校验写测试，资料答案质量不写字符串包含式单测。
 
 ```python
 from dataclasses import replace
@@ -172,7 +172,7 @@ def test_missing_neighbor_is_rejected():
 
 Run: `.venv/bin/python -m pytest tests/test_knowledge_corpus.py -q`。实现解析时使用显式字段校验、唯一 ID、完整章节路径、合法相邻指针和 source_key；正式问题目标 ID 必须存在且符合 category，可回答项 reference_answer 非空，无答案项 relevant IDs 为空。
 
-- [ ] **Step 3：执行标注验证并冻结。** `scripts/validate_knowledge_data.py` 调用校验函数，报告语料/集合数量、桶/难度分布、跨集合重复、标注引用、内容哈希；任一错误非零退出。`scripts/init_knowledge.py` 显式 create_schema 后只调用知识种子仓储，不调用旧 FAQ seed、不清空数据；默认读取仓库文件，可通过 --corpus 指定文件。运行两次核对计数不变。
+- [x] **Step 3：执行标注验证并冻结。** `scripts/validate_knowledge_data.py` 调用校验函数，报告语料/集合数量、桶/难度分布、跨集合重复、标注引用、内容哈希；任一错误非零退出。`scripts/init_knowledge.py` 显式 create_schema 后只调用知识种子仓储，不调用旧 FAQ seed、不清空数据；默认读取仓库文件，可通过 --corpus 指定文件。运行两次核对计数不变。
 
 ```bash
 .venv/bin/python scripts/validate_knowledge_data.py
@@ -180,7 +180,7 @@ Run: `.venv/bin/python -m pytest tests/test_knowledge_corpus.py -q`。实现解�
 .venv/bin/python scripts/init_knowledge.py
 ```
 
-- [ ] **Step 4：评估记录与提交。** dev-notes/ch04-data-evaluation.md 逐类记录答案来源、条件保留、未知项无误标、资料无真实品牌承诺；记阶段日志并提交 `data: add traced ecommerce corpus and held-out evaluation cases`。
+- [x] **Step 4：评估记录与提交。** dev-notes/ch04-data-evaluation.md 逐类记录答案来源、条件保留、未知项无误标、资料无真实品牌承诺；记阶段日志并提交 `data: add traced ecommerce corpus and held-out evaluation cases`。
 
 ## Task 3：本地 dense/reranker 与有界推理
 
