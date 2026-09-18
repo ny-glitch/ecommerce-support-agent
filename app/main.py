@@ -21,6 +21,7 @@ from app.db.low_confidence import LowConfidenceRepository
 from app.db.tickets import TicketRepository
 from app.errors import ServiceError
 from app.model import ModelGateway, OpenAIModelGateway
+from app.resource_lifecycle import close_resources, warmup_local_models
 from app.knowledge.calibration import load_runtime_calibration
 from app.knowledge.corpus import corpus_fingerprint
 from app.knowledge.local_models import LocalModels
@@ -123,7 +124,7 @@ def create_app(
             cancellation = exc
             raise
         finally:
-            await _close_resources(owned_resources, cancellation=cancellation)
+            await close_resources(owned_resources, cancellation=cancellation)
 
     app = FastAPI(lifespan=lifespan)
     app.include_router(chat_router)
@@ -186,7 +187,7 @@ async def _production_knowledge_dependencies(
         settings,
         corpus_fingerprint=corpus_fingerprint(chunks),
     )
-    await _warmup_local_models(local_models)
+    await warmup_local_models(local_models)
 
     factory = getattr(model_gateway, "create_knowledge_gateway", None)
     if factory is None:
@@ -219,73 +220,3 @@ async def _check_knowledge_tables(database: Database) -> None:
             + ", ".join(missing)
             + "; run schema setup"
         )
-
-
-async def _warmup_local_models(local_models: LocalModels) -> None:
-    task = asyncio.create_task(asyncio.to_thread(local_models.warmup))
-    try:
-        await asyncio.shield(task)
-    except asyncio.CancelledError:
-        await _drain_task(task)
-        raise
-
-
-async def _drain_task(task: asyncio.Task[Any]) -> None:
-    while not task.done():
-        try:
-            await asyncio.shield(task)
-        except asyncio.CancelledError:
-            continue
-        except BaseException:
-            return
-    if not task.cancelled():
-        try:
-            task.exception()
-        except BaseException:
-            pass
-
-
-async def _close_resources(
-    resources_to_close: list[Any],
-    *,
-    cancellation: asyncio.CancelledError | None = None,
-) -> None:
-    cleanup_task = asyncio.create_task(_close_resources_once(resources_to_close))
-    close_error: Exception | None = None
-    while not cleanup_task.done():
-        try:
-            await asyncio.shield(cleanup_task)
-        except asyncio.CancelledError as exc:
-            if cancellation is None:
-                cancellation = exc
-        except Exception as exc:
-            close_error = exc
-            break
-
-    if close_error is None:
-        try:
-            cleanup_task.result()
-        except Exception as exc:
-            close_error = exc
-
-    if cancellation is not None:
-        if close_error is not None:
-            raise cancellation from close_error
-        raise cancellation
-    if close_error is not None:
-        raise close_error
-
-
-async def _close_resources_once(resources_to_close: list[Any]) -> None:
-    first_error: Exception | None = None
-    for resource in reversed(resources_to_close):
-        close = getattr(resource, "aclose", None)
-        if close is None:
-            continue
-        try:
-            await close()
-        except Exception as exc:
-            if first_error is None:
-                first_error = exc
-    if first_error is not None:
-        raise first_error

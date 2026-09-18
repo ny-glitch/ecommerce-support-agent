@@ -8,7 +8,14 @@ import openai
 from langchain_core.messages import BaseMessage
 from langchain_core.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    StringConstraints,
+    ValidationError,
+)
 
 from app.config import Settings
 from app.context import build_context
@@ -18,6 +25,9 @@ from app.prompts import evidence_assessment_system_prompt
 
 
 _PROMPT_PATH = Path(__file__).parents[1] / "prompts" / "query_normalization.txt"
+_FAITHFULNESS_PROMPT_PATH = (
+    Path(__file__).parents[1] / "prompts" / "faithfulness_judge.txt"
+)
 _Normalized = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=512),
@@ -40,6 +50,34 @@ class NormalizationRequestError(RuntimeError):
 
 
 class NormalizationResponseError(ValueError):
+    pass
+
+
+class FaithfulnessClaim(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    statement: str = Field(min_length=1, max_length=1_000)
+    supported: bool
+    source_ids: list[int] = Field(max_length=10)
+    reason: str = Field(min_length=1, max_length=600)
+
+
+class FaithfulnessJudgement(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    claims: list[FaithfulnessClaim] = Field(max_length=100)
+    _raw_response: str = PrivateAttr(default="")
+
+    @property
+    def raw_response(self) -> str:
+        return self._raw_response
+
+
+class FaithfulnessRequestError(RuntimeError):
+    pass
+
+
+class FaithfulnessResponseError(ValueError):
     pass
 
 
@@ -73,6 +111,21 @@ class KnowledgeGateway:
         self._assessment_prompt = assessment_prompt
         self._assessor = model.with_structured_output(
             EvidenceAssessment,
+            method="json_mode",
+            include_raw=True,
+            extra_body=dict(chat_extra_body),
+        )
+        faithfulness_template = PromptTemplate.from_template(
+            _FAITHFULNESS_PROMPT_PATH.read_text(encoding="utf-8")
+        )
+        self._faithfulness_prompt = faithfulness_template.format(
+            schema_json=json.dumps(
+                FaithfulnessJudgement.model_json_schema(),
+                ensure_ascii=False,
+            )
+        )
+        self._judge = model.with_structured_output(
+            FaithfulnessJudgement,
             method="json_mode",
             include_raw=True,
             extra_body=dict(chat_extra_body),
@@ -181,6 +234,75 @@ class KnowledgeGateway:
                 "EVIDENCE_ASSESSMENT_ERROR",
                 "证据充分性校验失败，请重试",
                 502,
+            ) from exc
+
+    async def judge(
+        self,
+        question: str,
+        answer: str,
+        sources: tuple[Citation, ...],
+    ) -> FaithfulnessJudgement:
+        payload = json.dumps(
+            {
+                "question": question,
+                "answer": answer,
+                "sources": [source.model_dump(mode="json") for source in sources],
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        messages = build_context(
+            self._faithfulness_prompt,
+            [],
+            payload,
+            self._settings,
+        ).messages
+        try:
+            result = await self._judge.ainvoke(messages)
+        except (
+            openai.ContentFilterFinishReasonError,
+            openai.LengthFinishReasonError,
+        ) as exc:
+            raise FaithfulnessResponseError(
+                "invalid structured faithfulness response"
+            ) from exc
+        except Exception as exc:
+            raise FaithfulnessRequestError("faithfulness request failed") from exc
+
+        try:
+            raw = result["raw"]
+            content = raw.content
+            finish_reason = raw.response_metadata.get("finish_reason")
+            parsed = result["parsed"]
+            if (
+                finish_reason != "stop"
+                or not isinstance(content, str)
+                or not content.strip()
+                or result["parsing_error"] is not None
+                or not isinstance(parsed, FaithfulnessJudgement)
+            ):
+                raise ValueError("incomplete or unparseable faithfulness response")
+            decoded = json.loads(content)
+            if not isinstance(decoded, dict):
+                raise ValueError("faithfulness response must be a JSON object")
+            validated = FaithfulnessJudgement.model_validate(decoded)
+            if validated != parsed:
+                raise ValueError("parsed faithfulness response does not match raw JSON")
+            available_ids = {source.chunk_id for source in sources}
+            for claim in validated.claims:
+                source_ids = claim.source_ids
+                if len(source_ids) != len(set(source_ids)):
+                    raise ValueError("faithfulness source IDs must be unique")
+                if claim.supported:
+                    if not source_ids or not set(source_ids).issubset(available_ids):
+                        raise ValueError("supported claim has invalid source IDs")
+                elif source_ids:
+                    raise ValueError("unsupported claim cannot name supporting sources")
+            validated._raw_response = content
+            return validated
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError, ValidationError) as exc:
+            raise FaithfulnessResponseError(
+                "invalid structured faithfulness response"
             ) from exc
 
 
