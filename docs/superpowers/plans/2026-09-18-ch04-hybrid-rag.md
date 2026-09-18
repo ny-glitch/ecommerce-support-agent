@@ -444,7 +444,7 @@ validate_citation_numbers 支持 `[1][2]` 形式，只允许本轮1..n；拒绝�
 
 `KnowledgeTurnRunner(pipeline,low_confidence,settings).execute(prepared:PreparedTurn,call:AIMessage,emit)->KnowledgeDecision` 组装 EvidenceBudget、调用pipeline，拒答时调用record_once；服务将decision序列化为工具结果，append_result确认后才输出sources/refusal。PreparedTurn增加started_at/category/knowledge_decision字段。`stream_events(...,deadline:float|Callable[[],float])` 每次循环重新读取live deadline。
 
-- [ ] **Step 1：写整轮状态与持久化 RED。** 在 tests/ch04_helpers.py 定义可排队的 FakeKnowledgePipeline：run返回预设KnowledgeDecision、记录原话/品类、可等待 Event 和抛 ServiceError；复用ch02会话仓储替身，不修改其审计语义。测试序列必须是meta→tool_status running→检索状态→tool结果持久化→sources→真实token→完成提交→done。拒答没有gateway.stream调用，先问题池/工具结果、再refusal、完成后done。
+- [x] **Step 1：写整轮状态与持久化 RED。** 在 tests/ch04_helpers.py 定义可排队的 FakeKnowledgePipeline：run返回预设KnowledgeDecision、记录原话/品类、可等待 Event 和抛 ServiceError；复用ch02会话仓储替身，不修改其审计语义。测试序列必须是meta→tool_status running→检索状态→tool结果持久化→sources→真实token→完成提交→done。拒答没有gateway.stream调用，先问题池/工具结果、再refusal、完成后done。
 
 ```python
 async def test_refusal_is_persisted_before_visible(rag_chat_case):
@@ -476,7 +476,7 @@ async def query_faq() -> str:
 
 KnowledgeInput 在 app/tools/schemas.py 中为 extra='forbid' 的空 Pydantic模型；历史keyword参数仅审计读取，不重放。归一化中的售后政策问题不能路由随机query_product，更新工具prompt后用校准样例验证选择。
 
-- [ ] **Step 3：固定编排、共享截止时间与审计。** prepare记录 started_at；selector仍受现有时限。选中query_faq后只延长一次到started_at+knowledge_request_timeout_seconds，HTTP层通过lambda读取，不改变其他工具时限。构造knowledge_call闭包时明确尚未选中call不可执行；选择后注入call与当前history，不能把模型工具参数作为问题原话。
+- [x] **Step 3：固定编排、共享截止时间与审计。** prepare记录 started_at；selector仍受现有时限。选中query_faq后只延长一次到started_at+knowledge_request_timeout_seconds，HTTP层通过lambda读取，不改变其他工具时限。构造knowledge_call闭包时明确尚未选中call不可执行；选择后注入call与当前history，不能把模型工具参数作为问题原话。
 
 ```python
 deadline_value = deadline if callable(deadline) else lambda: deadline
@@ -485,7 +485,9 @@ remaining = deadline_value() - asyncio.get_running_loop().time()
 
 知识结果保存后：拒答保存最终模板到assistant并发送refusal/done；充分则生成sources事件并用知识prompt和本轮实际证据进行astream，检查引用后提交done。串联 `_bounded` 时所有DB写加入_mutations，取消清理不得与未决写竞争。技术错误直接SSE error，不调用模型自由解释后当成功。
 
-- [ ] **Step 4：GREEN、旧行为调整和提交。** 旧query_faq字面漏召回测试只在在线业务测试中更新；FaqRepository原始LIKE仓储测试保留作第二章行为记录，第一章提取/其他四工具/取消/工单幂等回归继续通过。增加真实MySQL断连前后pool和工具审计验证；知识result >4KB可原样保存、普通工具仍受4KB上限。评审后提交 `feat: integrate grounded retrieval into persisted streaming chat`。
+- [x] **Step 4：GREEN、旧行为调整和提交。** 旧query_faq字面漏召回测试只在在线业务测试中更新；FaqRepository原始LIKE仓储测试保留作第二章行为记录，第一章提取/其他四工具/取消/工单幂等回归继续通过。增加真实MySQL断连前后pool和工具审计验证；知识result >4KB可原样保存、普通工具仍受4KB上限。评审后提交 `feat: integrate grounded retrieval into persisted streaming chat`。
+
+执行状态：Task7代码与本地验证已独立评审通过（bb0ce7c + 6415585）；完整374项通过，修正覆盖58项通过。Step2中的真实工具路由Prompt校准仍待外发授权，其他实现已就绪；Task7整体不标完成。生产依赖和HTTP调用点按计划由Task8装配。
 
 ## Task 8：应用生命周期、原文 API 与配置交付
 
