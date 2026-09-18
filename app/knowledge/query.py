@@ -5,6 +5,7 @@ import logging
 import re
 import time
 import unicodedata
+from collections import Counter
 from typing import Protocol
 
 from app.errors import ServiceError
@@ -25,8 +26,9 @@ _ALPHANUMERIC_IDENTIFIER = re.compile(
     r"(?![A-Za-z0-9])"
 )
 _NUMBER = re.compile(r"(?<!\d)\d+(?:\.\d+)?(?!\d)")
+_INTERROGATIVE_NEGATION = re.compile(r"是不是")
 _NEGATION = re.compile(
-    r"不支持|不能|不可以|不会|没有|不得|不建议|不含|不附送|未|无|不(?!是)"
+    r"不支持|不能|不可以|不会|不是|没有|不得|不建议|不含|不附送|未|无|不"
 )
 
 
@@ -48,6 +50,14 @@ def _numbers(value: str) -> set[str]:
     return {match.group(0) for match in _NUMBER.finditer(canonical)}
 
 
+def _negation_markers(value: str) -> tuple[str, ...]:
+    canonical = _canonical(value)
+    without_interrogatives = _INTERROGATIVE_NEGATION.sub("", canonical)
+    return tuple(
+        match.group(0) for match in _NEGATION.finditer(without_interrogatives)
+    )
+
+
 def protected_terms_preserved(original: str, normalized: str) -> bool:
     original_identifiers = _protected_identifiers(original)
     normalized_identifiers = _protected_identifiers(normalized)
@@ -55,8 +65,8 @@ def protected_terms_preserved(original: str, normalized: str) -> bool:
         return False
     if _numbers(original) != _numbers(normalized):
         return False
-    if (_NEGATION.search(original) is not None) != (
-        _NEGATION.search(normalized) is not None
+    if Counter(_negation_markers(original)) != Counter(
+        _negation_markers(normalized)
     ):
         return False
     return True
@@ -68,8 +78,7 @@ def _introduces_protected_terms(original: str, candidate: str) -> bool:
             _protected_identifiers(original)
         )
         or not _numbers(candidate).issubset(_numbers(original))
-        or (_NEGATION.search(candidate) is not None)
-        != (_NEGATION.search(original) is not None)
+        or bool(_negation_markers(candidate)) != bool(_negation_markers(original))
     )
 
 

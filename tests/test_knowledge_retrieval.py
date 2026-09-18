@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 
 import pytest
@@ -225,3 +226,52 @@ async def test_bm25_query_is_bounded_without_extra_search_rounds() -> None:
 
     assert len(store.calls) == 1
     assert len(store.calls[0][1]) <= 2_048
+
+
+async def test_absolute_deadline_cancels_slow_mysql_hydration() -> None:
+    original = chunk(1)
+    store = Store(hits_for([original]))
+
+    class SlowRepo:
+        def __init__(self) -> None:
+            self.started = False
+            self.completed = False
+
+        async def get_many(self, ids: list[int]) -> dict[int, KnowledgeChunk]:
+            self.started = True
+            await asyncio.sleep(0.2)
+            self.completed = True
+            return {original.id: original}
+
+    repo = SlowRepo()
+
+    with pytest.raises(TimeoutError):
+        await KnowledgeRetriever(repo, store, Models()).retrieve(
+            plan(),
+            "bm25",
+            deadline=time.monotonic() + 0.01,
+        )
+
+    assert repo.started is True
+    assert repo.completed is False
+
+
+async def test_absolute_deadline_cancels_slow_progress_callback_before_search() -> None:
+    store = Store([])
+    callback_completed = False
+
+    async def slow_emit(_stage: str) -> None:
+        nonlocal callback_completed
+        await asyncio.sleep(0.2)
+        callback_completed = True
+
+    with pytest.raises(TimeoutError):
+        await KnowledgeRetriever(Repo([]), store, Models()).retrieve(
+            plan(),
+            "bm25",
+            deadline=time.monotonic() + 0.01,
+            emit=slow_emit,
+        )
+
+    assert callback_completed is False
+    assert store.calls == []

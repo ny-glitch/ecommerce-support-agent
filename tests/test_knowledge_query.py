@@ -103,6 +103,26 @@ def test_rewrite_must_keep_model_and_negation() -> None:
     )
 
 
+def test_rewrite_distinguishes_negative_bushi_from_interrogative_shibushi() -> None:
+    assert not protected_terms_preserved("保修期不是 2 年吗？", "保修期是 2 年吗？")
+    assert protected_terms_preserved("这是不是故障？", "这是否属于故障？")
+
+
+def test_rewrite_cannot_drop_one_of_multiple_negative_conditions() -> None:
+    assert not protected_terms_preserved(
+        "C65-Pro 不支持 PPS，也不能给笔记本充电吗？",
+        "C65-Pro 支持 PPS，也不能给笔记本充电吗？",
+    )
+    assert protected_terms_preserved(
+        "C65-Pro 不支持啥协议？",
+        "C65-Pro 不支持哪些协议？",
+    )
+    assert not protected_terms_preserved(
+        "C65-Pro 不支持 PPS，也不能给笔记本充电吗？",
+        "C65-Pro 支持 PPS，也不能给笔记本充电，而且不会发热吗？",
+    )
+
+
 @pytest.mark.parametrize(
     ("original", "normalized"),
     [

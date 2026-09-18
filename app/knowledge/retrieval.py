@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import time
 from collections.abc import Awaitable, Callable, Iterable
 from typing import Literal, Protocol
 
@@ -95,6 +97,25 @@ class KnowledgeRetriever:
         *,
         deadline: float,
         emit: Callable[[str], Awaitable[None]] | None = None,
+    ) -> RetrievalResult:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("knowledge retrieval deadline exceeded")
+        async with asyncio.timeout(remaining):
+            return await self._retrieve(
+                plan,
+                strategy,
+                deadline=deadline,
+                emit=emit,
+            )
+
+    async def _retrieve(
+        self,
+        plan: QueryPlan,
+        strategy: RetrievalStrategy,
+        *,
+        deadline: float,
+        emit: Callable[[str], Awaitable[None]] | None,
     ) -> RetrievalResult:
         if emit is not None:
             await emit("retrieving")
