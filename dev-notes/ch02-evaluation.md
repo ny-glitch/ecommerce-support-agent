@@ -16,7 +16,7 @@
 
 ## 标注集与其他验证
 
-真实标注评估和工单/curl验证已完成，最终全分支评审与最终代码检查仍待完成。
+真实标注评估和工单/curl验证已完成，最终全分支评审与最终代码检查已完成，详见文末。
 
 ## 重启后上下文与真实 curl
 
@@ -55,4 +55,14 @@
 - wheel构建及仓库外安装/实际导入通过，包含api/db/services/tools四包、customer_service/after_sales/tool_chat三模板和HTML；证据`evals/reports/ch02-wheel-check.json`。
 - 既有测试警告来自Starlette使用AnyIO已弃用BlockingPortal别名，没有为消除警告擅自升级固定依赖。pip沙箱缓存提示只影响缓存，构建时缺失默认CA用现有certifi显式指定，TLS校验始终开启。
 - 未做生产账号鉴权、多worker协调、真实业务系统接入；这是已批准的单worker本地演示范围。MySQL和预览服务需保持运行。
-- 独立任务评审/全分支评审正在进行，最终结论随后追加。
+- 独立任务评审已通过；最终总评审及复审结论见下。
+
+## 最终修复、评审与交付
+
+总评审发现README缺少.env.test步骤（P2）和超长业务状态保护遗漏（P3）；统一修复7061747经原评审者限定复审，两项均ADDRESSED，Approved / Ready to merge: Yes。没有残留Critical/Important。已有弃用警告与邮费后续建议措辞不足维持明确披露。
+
+最终提交7061747全量 `pytest --require-mysql -q --tb=short`：**244 passed，1 warning，22.92s，0 skipped**。新增四个状态保护/溢出回归；25项真实MySQL集成包含在该全量内。pip check与diff检查通过。
+
+最终wheel重新构建并在仓库外安装，实际验证四子包、三模板、HTML与业务状态保留通过，SHA256：`0325f130f970b62ae41931823cc9215adeafecd4d0e54be77c7b29c8794c131c`。最终修复只影响异常长度的序列化与文档，正常工具协议、Prompt和实际标注输入未改；保留前述真实模型证据，不重复消耗付费请求。
+
+8001已刷新到最终代码，浏览器首页可见，单worker服务保持运行；8000从未操作。功能与验收完成，当前分支codex/ch02-tools完整保留，基线codex/ch01-chat、无远程仓库；分支整合方式交给用户选择。
