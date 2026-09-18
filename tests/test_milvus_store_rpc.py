@@ -12,6 +12,7 @@ import app.knowledge.milvus_store as milvus_module
 from app.config import Settings
 from app.knowledge.indexer import IndexerAlreadyRunningError, KnowledgeIndexer
 from app.knowledge.milvus_store import (
+    IncompatibleMilvusSchemaError,
     MilvusDeadlineExceeded,
     MilvusQueueFullError,
     MilvusStore,
@@ -35,6 +36,38 @@ async def _force_executor_cleanup(store: MilvusStore) -> None:
         wait=True,
         cancel_futures=False,
     )
+
+
+@pytest.mark.asyncio
+async def test_prepare_existing_collection_never_creates_missing_collection(
+    tmp_path: Path,
+) -> None:
+    calls: list[str] = []
+
+    class Client:
+        def get_server_version(self, *, timeout: float) -> str:
+            calls.append("get_server_version")
+            return "2.6.23"
+
+        def has_collection(self, _name: str, *, timeout: float) -> bool:
+            calls.append("has_collection")
+            return False
+
+        def create_collection(self, *_args: Any, **_kwargs: Any) -> None:
+            calls.append("create_collection")
+
+        def close(self) -> None:
+            return None
+
+    store = MilvusStore(_settings(tmp_path))
+    store._client = Client()  # type: ignore[assignment]
+    try:
+        with pytest.raises(IncompatibleMilvusSchemaError, match="does not exist"):
+            await store.prepare_existing_collection()
+    finally:
+        await store.aclose()
+
+    assert calls == ["get_server_version", "has_collection"]
 
 
 @pytest.mark.asyncio

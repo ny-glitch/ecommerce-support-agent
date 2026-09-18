@@ -98,6 +98,21 @@ class MilvusStore:
             await self._validate_schema(deadline)
         await self._call("load_collection", self._collection_name, deadline=deadline)
 
+    async def prepare_existing_collection(self) -> None:
+        """Validate and load an existing collection without creating or mutating it."""
+        await self.check()
+        deadline = self._deadline()
+        exists = await self._call(
+            "has_collection", self._collection_name, deadline=deadline
+        )
+        if not exists:
+            raise IncompatibleMilvusSchemaError(
+                f"Milvus collection {self._collection_name!r} does not exist; "
+                "run scripts/index_knowledge.py"
+            )
+        await self._validate_schema(deadline)
+        await self._call("load_collection", self._collection_name, deadline=deadline)
+
     async def upsert(
         self,
         chunks: list[KnowledgeChunk],

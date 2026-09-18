@@ -202,6 +202,36 @@ async def test_gateway_disables_responses_usage_and_retries(
     assert "private upstream detail" not in exc_info.value.message
 
 
+async def test_knowledge_gateway_reuses_owned_chat_model_and_protected_body(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings
+) -> None:
+    captured = {}
+
+    class KnowledgeGateway:
+        def __init__(self, model, **kwargs):
+            captured.update(model=model, **kwargs)
+
+    monkeypatch.setattr(model_module, "KnowledgeGateway", KnowledgeGateway)
+    gateway, _client = make_gateway(
+        monkeypatch,
+        settings,
+        lambda _request: httpx.Response(500),
+    )
+
+    try:
+        knowledge = gateway.create_knowledge_gateway()
+    finally:
+        await gateway.aclose()
+
+    assert isinstance(knowledge, KnowledgeGateway)
+    assert captured["settings"] is settings
+    assert captured["model"] is gateway._model
+    assert captured["chat_extra_body"] == {
+        "max_completion_tokens": 512,
+        "thinking": {"type": "disabled"},
+    }
+
+
 @pytest.mark.parametrize("token_field", ["max_tokens", "max_completion_tokens"])
 async def test_extract_uses_chat_completions_json_mode_and_selected_token_field(
     monkeypatch: pytest.MonkeyPatch, settings: Settings, token_field: str

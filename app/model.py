@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from app.config import Settings
 from app.context import build_context
 from app.errors import ServiceError
+from app.knowledge.gateway import KnowledgeGateway
 from app.prompts import extraction_system_prompt
 from app.schemas import AfterSalesResult
 
@@ -59,6 +60,13 @@ class OpenAIModelGateway:
             AfterSalesResult,
             method="json_mode",
             include_raw=True,
+        )
+
+    def create_knowledge_gateway(self) -> KnowledgeGateway:
+        return KnowledgeGateway(
+            self._model,
+            chat_extra_body=dict(self._chat_extra_body),
+            settings=self._settings,
         )
 
     async def select(

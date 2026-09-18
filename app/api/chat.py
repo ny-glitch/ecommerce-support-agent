@@ -16,7 +16,9 @@ router = APIRouter()
 async def prepare_chat(body: ChatRequest, request: Request) -> AsyncIterator[PreparedTurn]:
     service = request.app.state.chat_service
     async with service.prepare(
-        body.message, str(body.session_id) if body.session_id else None
+        body.message,
+        str(body.session_id) if body.session_id else None,
+        category=body.category,
     ) as prepared:
         yield prepared
 
@@ -28,7 +30,7 @@ async def chat(
 ) -> AsyncIterator[ServerSentEvent]:
     service = request.app.state.chat_service
     async with aclosing(stream_events(
-        request, service.stream(prepared), deadline=prepared.deadline
+        request, service.stream(prepared), deadline=lambda: prepared.deadline
     )) as events:
         async for item in events:
             yield ServerSentEvent(

@@ -13,6 +13,15 @@ RequestText = Annotated[
         max_length=32_000,
     ),
 ]
+CategoryText = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        strict=True,
+        min_length=1,
+        max_length=255,
+    ),
+]
 
 
 class AfterSalesResult(BaseModel):
@@ -37,6 +46,7 @@ class ChatRequest(BaseModel):
 
     message: RequestText
     session_id: UUID | None = None
+    category: CategoryText | None = None
 
 
 class ExtractRequest(BaseModel):
