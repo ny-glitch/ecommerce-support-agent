@@ -6,7 +6,14 @@ from typing import Any
 
 
 MAX_TOOL_RESULT_BYTES = 4096
-_ESSENTIAL_KEYS = {"status", "code", "ticket_no", "order_id"}
+_ESSENTIAL_KEYS = {
+    "status",
+    "code",
+    "ticket_no",
+    "order_id",
+    "order_status",
+    "logistics_status",
+}
 
 
 class InvalidToolArguments(Exception):

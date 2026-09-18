@@ -22,7 +22,7 @@ LLM_BASE_URL=https://api.example.com/v1
 LLM_MODEL=填写账户实际可用且支持 tools 和流式输出的模型名
 LLM_API_KEY=填写密钥
 DATABASE_URL=mysql+asyncmy://support:本地密码@127.0.0.1:3307/support
-TEST_DATABASE_URL=mysql+asyncmy://support_test:本地测试密码@127.0.0.1:13307/support_test
+MYSQL_TEST_PASSWORD=replace-support-test-password
 LLM_TOKEN_LIMIT_PARAM=max_completion_tokens
 LLM_CHAT_EXTRA_BODY={}
 CONTEXT_WINDOW_TOKENS=8192
@@ -129,7 +129,14 @@ BASE_URL=http://127.0.0.1:8001 bash scripts/demo_tools.sh
 .venv/bin/python -m pytest -q
 ```
 
-MySQL 集成测试使用隔离的 `support_test` 数据库，不能指向开发库：
+MySQL 集成测试使用隔离的 `support_test` 数据库，不能指向开发库。Docker Compose 从 `.env` 读取 `MYSQL_TEST_PASSWORD`，pytest 只从进程环境或被 Git 忽略的 `.env.test` 读取 `TEST_DATABASE_URL`。创建 `.env.test`，并让 URL 密码与 `.env` 中的 `MYSQL_TEST_PASSWORD` 一致；不要填写真实生产凭据：
+
+```dotenv
+# .env.test
+TEST_DATABASE_URL=mysql+asyncmy://support_test:replace-support-test-password@127.0.0.1:13307/support_test
+```
+
+随后启动测试库并强制运行集成测试：
 
 ```bash
 docker compose --profile test up -d --wait test-db

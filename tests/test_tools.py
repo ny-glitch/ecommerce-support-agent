@@ -238,6 +238,46 @@ def test_bounded_result_keeps_first_list_item_while_shortening_description() -> 
     assert payload["truncated"] is True
 
 
+@pytest.mark.parametrize("status_key", ["order_status", "logistics_status"])
+def test_bounded_result_preserves_business_status_while_shrinking_description(
+    status_key: str,
+) -> None:
+    business_status = "S" * 3_000
+
+    result = bounded_result(
+        {
+            "status": "ok",
+            "data": {
+                status_key: business_status,
+                "description": "D" * 6_000,
+            },
+        }
+    )
+
+    payload = json.loads(result)
+    assert len(result.encode("utf-8")) <= 4096
+    assert payload["status"] == "ok"
+    assert payload["data"][status_key] == business_status
+    assert payload["data"]["description"] != "D" * 6_000
+    assert payload["truncated"] is True
+
+
+@pytest.mark.parametrize("status_key", ["order_status", "logistics_status"])
+def test_bounded_result_fails_safely_when_business_status_cannot_fit(
+    status_key: str,
+) -> None:
+    result = bounded_result(
+        {"status": "ok", "data": {status_key: "S" * 5_000}}
+    )
+
+    assert len(result.encode("utf-8")) <= 4096
+    assert json.loads(result) == {
+        "status": "error",
+        "code": "TOOL_RESULT_TOO_LARGE",
+        "truncated": True,
+    }
+
+
 def test_tool_settings_default_and_attempt_validation() -> None:
     defaults = Settings(
         _env_file=None,
