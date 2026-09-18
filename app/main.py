@@ -67,6 +67,7 @@ def create_app(
         database = None
         model_gateway = gateway
         owned_resources: list[Any] = []
+        cancellation: asyncio.CancelledError | None = None
         try:
             if model_gateway is None:
                 model_gateway = OpenAIModelGateway(configuration)
@@ -118,8 +119,11 @@ def create_app(
             if dependencies is not None:
                 app.state.knowledge_repository = dependencies.repository
             yield
+        except asyncio.CancelledError as exc:
+            cancellation = exc
+            raise
         finally:
-            await _close_resources(owned_resources)
+            await _close_resources(owned_resources, cancellation=cancellation)
 
     app = FastAPI(lifespan=lifespan)
     app.include_router(chat_router)
@@ -241,7 +245,38 @@ async def _drain_task(task: asyncio.Task[Any]) -> None:
             pass
 
 
-async def _close_resources(resources_to_close: list[Any]) -> None:
+async def _close_resources(
+    resources_to_close: list[Any],
+    *,
+    cancellation: asyncio.CancelledError | None = None,
+) -> None:
+    cleanup_task = asyncio.create_task(_close_resources_once(resources_to_close))
+    close_error: Exception | None = None
+    while not cleanup_task.done():
+        try:
+            await asyncio.shield(cleanup_task)
+        except asyncio.CancelledError as exc:
+            if cancellation is None:
+                cancellation = exc
+        except Exception as exc:
+            close_error = exc
+            break
+
+    if close_error is None:
+        try:
+            cleanup_task.result()
+        except Exception as exc:
+            close_error = exc
+
+    if cancellation is not None:
+        if close_error is not None:
+            raise cancellation from close_error
+        raise cancellation
+    if close_error is not None:
+        raise close_error
+
+
+async def _close_resources_once(resources_to_close: list[Any]) -> None:
     first_error: Exception | None = None
     for resource in reversed(resources_to_close):
         close = getattr(resource, "aclose", None)

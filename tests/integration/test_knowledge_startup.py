@@ -26,7 +26,13 @@ class KnowledgeCapableGateway(RecordingGateway):
         await super().aclose()
 
 
-def install_runtime_fakes(monkeypatch, events: list[str], *, warmup=None):
+def install_runtime_fakes(
+    monkeypatch,
+    events: list[str],
+    *,
+    warmup=None,
+    close_models=None,
+):
     class Database:
         def __init__(self, _url):
             self.sessions = object()
@@ -67,6 +73,9 @@ def install_runtime_fakes(monkeypatch, events: list[str], *, warmup=None):
             events.append("warmup_finished")
 
         async def aclose(self):
+            events.append("models_close_started")
+            if close_models is not None:
+                await close_models(self)
             events.append("models_closed")
 
     async def check_tables(_database):
@@ -144,6 +153,122 @@ async def test_startup_cancellation_drains_physical_warmup_before_cleanup(monkey
         "database_closed",
         "gateway_closed",
     ]
+
+
+async def test_repeated_cancellation_drains_all_cleanup_once(monkeypatch) -> None:
+    events: list[str] = []
+    warmup_entered = threading.Event()
+    release_warmup = threading.Event()
+    close_entered = asyncio.Event()
+    release_close = asyncio.Event()
+
+    def blocked_warmup(_models):
+        warmup_entered.set()
+        release_warmup.wait(2)
+
+    async def blocked_close(_models):
+        close_entered.set()
+        await release_close.wait()
+
+    install_runtime_fakes(
+        monkeypatch,
+        events,
+        warmup=blocked_warmup,
+        close_models=blocked_close,
+    )
+    gateway = KnowledgeCapableGateway(events)
+    app = create_app(
+        settings(database_url="mysql+asyncmy://local/test"), gateway
+    )
+
+    async def start() -> None:
+        async with app.router.lifespan_context(app):
+            pytest.fail("cancelled startup must not become ready")
+
+    task = asyncio.create_task(start())
+    try:
+        assert await asyncio.to_thread(warmup_entered.wait, 1)
+        task.cancel()
+        release_warmup.set()
+        await asyncio.wait_for(close_entered.wait(), 1)
+
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        assert "store_closed" not in events
+    finally:
+        release_warmup.set()
+        release_close.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert events.count("models_close_started") == 1
+    assert events.count("models_closed") == 1
+    assert events.count("store_closed") == 1
+    assert events.count("database_closed") == 1
+    assert events.count("gateway_closed") == 1
+    assert events[-4:] == [
+        "models_closed",
+        "store_closed",
+        "database_closed",
+        "gateway_closed",
+    ]
+
+
+async def test_cancelled_cleanup_keeps_close_error_observable(monkeypatch) -> None:
+    events: list[str] = []
+    warmup_entered = threading.Event()
+    release_warmup = threading.Event()
+    close_entered = asyncio.Event()
+    release_close = asyncio.Event()
+
+    def blocked_warmup(_models):
+        warmup_entered.set()
+        release_warmup.wait(2)
+
+    async def failing_close(_models):
+        close_entered.set()
+        await release_close.wait()
+        raise RuntimeError("model close failed")
+
+    install_runtime_fakes(
+        monkeypatch,
+        events,
+        warmup=blocked_warmup,
+        close_models=failing_close,
+    )
+    gateway = KnowledgeCapableGateway(events)
+    app = create_app(
+        settings(database_url="mysql+asyncmy://local/test"), gateway
+    )
+
+    async def start() -> None:
+        async with app.router.lifespan_context(app):
+            pytest.fail("cancelled startup must not become ready")
+
+    task = asyncio.create_task(start())
+    try:
+        assert await asyncio.to_thread(warmup_entered.wait, 1)
+        task.cancel()
+        release_warmup.set()
+        await asyncio.wait_for(close_entered.wait(), 1)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+    finally:
+        release_warmup.set()
+        release_close.set()
+
+    with pytest.raises(asyncio.CancelledError) as exc_info:
+        await task
+
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    assert str(exc_info.value.__cause__) == "model close failed"
+    assert events.count("models_close_started") == 1
+    assert events.count("store_closed") == 1
+    assert events.count("database_closed") == 1
+    assert events.count("gateway_closed") == 1
 
 
 async def test_missing_dependency_still_closes_created_resources(monkeypatch) -> None:
