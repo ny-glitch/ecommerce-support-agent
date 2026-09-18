@@ -4,10 +4,9 @@ import asyncio
 import json
 import math
 import re
+import threading
 import time
-from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from functools import partial
 from typing import Any
 
 from pymilvus import (
@@ -27,6 +26,7 @@ from app.knowledge.text import embedding_text, source_hash
 
 _TEST_COLLECTION = re.compile(r"^ch04_test_[0-9a-f]{32}$")
 _TEXT_MAX_BYTES = 65_535
+_ABANDONED = object()
 _FIELD_SPECS = {
     "id": (DataType.INT64, None),
     "text": (DataType.VARCHAR, _TEXT_MAX_BYTES),
@@ -45,6 +45,10 @@ class IncompatibleMilvusSchemaError(RuntimeError):
 
 
 class MilvusDeadlineExceeded(TimeoutError):
+    pass
+
+
+class MilvusQueueFullError(RuntimeError):
     pass
 
 
@@ -67,8 +71,12 @@ class MilvusStore:
             thread_name_prefix="knowledge-milvus",
         )
         self._client: MilvusClient | None = None
+        self._capacity = 2
+        self._state_lock = threading.Lock()
+        self._inflight = 0
         self._close_lock = asyncio.Lock()
         self._closed = False
+        self._shutdown_task: asyncio.Task[None] | None = None
 
     async def ensure_schema(self) -> None:
         deadline = self._deadline()
@@ -207,14 +215,14 @@ class MilvusStore:
 
     async def aclose(self) -> None:
         async with self._close_lock:
-            if self._closed:
-                return
-            self._closed = True
-            client = self._client
-            if client is not None:
-                loop = asyncio.get_running_loop()
-                await loop.run_in_executor(self._executor, client.close)
-            self._executor.shutdown(wait=True, cancel_futures=False)
+            if self._shutdown_task is None:
+                with self._state_lock:
+                    self._closed = True
+                self._shutdown_task = asyncio.create_task(
+                    asyncio.to_thread(self._shutdown_sync)
+                )
+            shutdown_task = self._shutdown_task
+        await asyncio.shield(shutdown_task)
 
     async def _fingerprints(
         self, ids: list[int], deadline: float
@@ -264,20 +272,46 @@ class MilvusStore:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise MilvusDeadlineExceeded("Milvus deadline exceeded")
-        kwargs["timeout"] = remaining
+        abandoned = threading.Event()
+        with self._state_lock:
+            if self._closed:
+                raise RuntimeError("Milvus store is closed")
+            if self._inflight >= self._capacity:
+                raise MilvusQueueFullError("Milvus RPC queue is full")
+            self._inflight += 1
+            try:
+                future = self._executor.submit(
+                    self._invoke,
+                    method_name,
+                    args,
+                    kwargs,
+                    deadline,
+                    abandoned,
+                )
+            except BaseException:
+                self._inflight -= 1
+                raise
+        future.add_done_callback(lambda _future: self._release_capacity())
         loop = asyncio.get_running_loop()
-        operation: Callable[[], Any] = partial(
-            self._invoke,
-            method_name,
-            args,
-            kwargs,
-        )
+        wrapped = asyncio.wrap_future(future, loop=loop)
         try:
-            return await asyncio.wait_for(
-                loop.run_in_executor(self._executor, operation),
-                timeout=remaining,
+            result = await asyncio.wait_for(
+                asyncio.shield(wrapped), timeout=remaining
             )
+            if result is _ABANDONED:
+                raise MilvusDeadlineExceeded("Milvus deadline exceeded")
+            return result
+        except asyncio.CancelledError:
+            abandoned.set()
+            await _drain_future(wrapped)
+            raise
         except TimeoutError as exc:
+            if future.done() and not future.cancelled():
+                underlying = future.exception()
+                if isinstance(underlying, TimeoutError):
+                    raise underlying
+            abandoned.set()
+            await _drain_future(wrapped)
             raise MilvusDeadlineExceeded("Milvus deadline exceeded") from exc
 
     def _invoke(
@@ -285,19 +319,51 @@ class MilvusStore:
         method_name: str,
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
+        deadline: float,
+        abandoned: threading.Event,
     ) -> Any:
-        if self._closed:
-            raise RuntimeError("Milvus store is closed")
+        if abandoned.is_set():
+            return _ABANDONED
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise MilvusDeadlineExceeded("Milvus deadline exceeded")
         if self._client is None:
             token = self._settings.milvus_token
             client_kwargs: dict[str, Any] = {"uri": self._settings.milvus_uri}
             if token is not None and token.get_secret_value():
                 client_kwargs["token"] = token.get_secret_value()
             self._client = MilvusClient(**client_kwargs)
-        return getattr(self._client, method_name)(*args, **kwargs)
+        call_kwargs = dict(kwargs)
+        call_kwargs["timeout"] = remaining
+        return getattr(self._client, method_name)(*args, **call_kwargs)
+
+    def _release_capacity(self) -> None:
+        with self._state_lock:
+            self._inflight -= 1
+
+    def _shutdown_sync(self) -> None:
+        self._executor.shutdown(wait=True, cancel_futures=False)
+        client = self._client
+        if client is not None:
+            client.close()
 
     def _deadline(self) -> float:
         return time.monotonic() + self._settings.knowledge_request_timeout_seconds
+
+
+async def _drain_future(future: asyncio.Future[Any]) -> None:
+    while not future.done():
+        try:
+            await asyncio.shield(future)
+        except asyncio.CancelledError:
+            continue
+        except BaseException:
+            return
+    if not future.cancelled():
+        try:
+            future.exception()
+        except BaseException:
+            pass
 
 
 def _build_schema():

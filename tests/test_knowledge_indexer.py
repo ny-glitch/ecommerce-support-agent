@@ -6,6 +6,7 @@ import fcntl
 import pytest
 
 from app.knowledge.indexer import IndexerAlreadyRunningError, KnowledgeIndexer
+from app.knowledge.local_models import InputTooLongError
 from app.knowledge.milvus_store import validate_test_collection
 from tests.ch04_helpers import make_chunk
 
@@ -125,7 +126,10 @@ async def test_repeat_upsert_uses_same_id_after_sql_confirmation_error(
 
 
 @pytest.mark.asyncio
-async def test_invalid_int64_id_remains_pending_without_model_call(tmp_path) -> None:
+async def test_invalid_int64_id_remains_pending_without_model_call(
+    tmp_path,
+    caplog,
+) -> None:
     chunk = make_chunk(id=2**63)
 
     class Repo:
@@ -146,11 +150,14 @@ async def test_invalid_int64_id_remains_pending_without_model_call(tmp_path) -> 
         async def embed(self, texts, *, deadline: float):
             raise AssertionError("invalid ID must not be embedded")
 
-    result = await KnowledgeIndexer(
-        Repo(), Store(), Models(), lock_path=tmp_path / "index.lock"
-    ).run()
+    with caplog.at_level("ERROR"):
+        result = await KnowledgeIndexer(
+            Repo(), Store(), Models(), lock_path=tmp_path / "index.lock"
+        ).run()
 
     assert result == {"indexed": 0, "skipped": 0, "failed": 1}
+    assert "chunk 9223372036854775808" in caplog.text
+    assert "outside signed INT64 range" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -320,3 +327,69 @@ async def test_pending_chunks_are_embedded_and_upserted_as_one_batch(tmp_path) -
     assert result == {"indexed": 2, "skipped": 0, "failed": 0}
     assert models.batch_sizes == [2]
     assert store.batches == [[910011, 910012]]
+
+
+@pytest.mark.asyncio
+async def test_oversized_model_input_is_identified_and_valid_rows_continue(
+    tmp_path,
+    caplog,
+) -> None:
+    chunks = [
+        make_chunk(id=910021, questions="valid one"),
+        make_chunk(id=910022, questions="private oversized source"),
+        make_chunk(id=910023, questions="valid two"),
+    ]
+
+    class Repo:
+        def __init__(self) -> None:
+            self.done: list[int] = []
+
+        async def list_all(self):
+            return chunks
+
+        async def mark_done_if_current(self, chunk_id: int, expected_hash: str):
+            self.done.append(chunk_id)
+            return True
+
+    class Store:
+        def __init__(self) -> None:
+            self.ids: list[int] = []
+
+        async def ensure_schema(self):
+            return None
+
+        async def upsert(self, batch, vectors, *, deadline: float):
+            self.ids.extend(chunk.id for chunk in batch)
+
+    class Models:
+        def __init__(self) -> None:
+            self.batch_sizes: list[int] = []
+
+        async def embed(self, texts, *, deadline: float):
+            self.batch_sizes.append(len(texts))
+            if len(texts) == 3:
+                raise InputTooLongError(
+                    input_kind="embedding",
+                    input_index=1,
+                    token_count=8_193,
+                    token_limit=8_192,
+                )
+            return [[1.0] + [0.0] * 1023 for _text in texts]
+
+    repo, store, models = Repo(), Store(), Models()
+    with caplog.at_level("ERROR"):
+        result = await KnowledgeIndexer(
+            repo,
+            store,
+            models,
+            lock_path=tmp_path / "index.lock",
+        ).run()
+
+    assert result == {"indexed": 2, "skipped": 0, "failed": 1}
+    assert models.batch_sizes == [3, 2]
+    assert store.ids == [910021, 910023]
+    assert repo.done == [910021, 910023]
+    assert "chunk 910022" in caplog.text
+    assert "8193 tokens" in caplog.text
+    assert "maximum is 8192" in caplog.text
+    assert "private oversized source" not in caplog.text

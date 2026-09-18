@@ -143,11 +143,14 @@ async def test_embed_batches_dense_only_and_returns_plain_finite_vectors(
 async def test_embed_rejects_oversized_input_before_model_call(tmp_path: Path) -> None:
     models, embedder, _ = make_models(tmp_path)
     try:
-        with pytest.raises(InputTooLongError, match="embedding input"):
+        with pytest.raises(InputTooLongError, match="embedding input") as exc_info:
             await models.embed(
                 ["one two three four five six seven"],
                 deadline=time.monotonic() + 2,
             )
+        assert exc_info.value.input_index == 0
+        assert exc_info.value.token_count == 9
+        assert exc_info.value.token_limit == 8
         assert embedder.calls == []
     finally:
         await models.aclose()

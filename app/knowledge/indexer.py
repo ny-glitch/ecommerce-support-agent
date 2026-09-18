@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Protocol
 
 from app.knowledge.contracts import KnowledgeChunk
+from app.knowledge.local_models import InputTooLongError
 from app.knowledge.text import embedding_text, source_hash
 
 
@@ -19,6 +20,10 @@ logger = logging.getLogger(__name__)
 
 
 class IndexerAlreadyRunningError(RuntimeError):
+    pass
+
+
+class ChunkValidationError(ValueError):
     pass
 
 
@@ -107,7 +112,31 @@ class KnowledgeIndexer:
 
         deadline = time.monotonic() + self._timeout_seconds
         try:
-            vectors = await self._models.embed(texts, deadline=deadline)
+            while pending:
+                try:
+                    vectors = await self._models.embed(texts, deadline=deadline)
+                    break
+                except InputTooLongError as exc:
+                    index = exc.input_index
+                    if (
+                        exc.input_kind != "embedding"
+                        or index is None
+                        or not 0 <= index < len(pending)
+                    ):
+                        raise
+                    invalid = pending.pop(index)
+                    texts.pop(index)
+                    counts["failed"] += 1
+                    _log_failure(invalid.id, exc)
+            else:
+                return counts
+        except Exception as exc:
+            counts["failed"] += len(pending)
+            for chunk in pending:
+                _log_failure(chunk.id, exc)
+            return counts
+
+        try:
             await self._store.upsert(pending, vectors, deadline=deadline)
         except Exception as exc:
             counts["failed"] += len(pending)
@@ -152,14 +181,16 @@ class KnowledgeIndexer:
 
 def _validated_text(chunk: KnowledgeChunk) -> str:
     if not 1 <= chunk.id <= _INT64_MAX:
-        raise ValueError(f"chunk {chunk.id} is outside signed INT64 range")
+        raise ChunkValidationError(
+            f"chunk {chunk.id} is outside signed INT64 range"
+        )
     _validate_utf8_field(chunk, "category", chunk.category, 1_020)
     _validate_utf8_field(chunk, "section_path", chunk.section_path, 2_048)
     _validate_utf8_field(chunk, "content_type", chunk.content_type, 128)
     text = embedding_text(chunk)
     byte_count = len(text.encode("utf-8"))
     if byte_count > _TEXT_MAX_BYTES:
-        raise ValueError(
+        raise ChunkValidationError(
             f"chunk {chunk.id} text has {byte_count} UTF-8 bytes; "
             f"maximum is {_TEXT_MAX_BYTES}"
         )
@@ -176,13 +207,16 @@ def _validate_utf8_field(
         return
     byte_count = len(value.encode("utf-8"))
     if byte_count > maximum:
-        raise ValueError(
+        raise ChunkValidationError(
             f"chunk {chunk.id} {name} has {byte_count} UTF-8 bytes; "
             f"maximum is {maximum}"
         )
 
 
 def _log_failure(chunk_id: int, exc: Exception) -> None:
+    if isinstance(exc, (ChunkValidationError, InputTooLongError)):
+        logger.error("knowledge chunk %s validation failed: %s", chunk_id, exc)
+        return
     logger.error(
         "knowledge chunk %s indexing failed: %s",
         chunk_id,

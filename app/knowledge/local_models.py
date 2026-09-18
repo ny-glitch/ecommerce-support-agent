@@ -4,7 +4,7 @@ import math
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 from app.config import Settings
 from app.knowledge.worker import InferenceDeadlineExceeded, InferenceWorker
@@ -44,7 +44,28 @@ class _Reranker(Protocol):
 
 
 class InputTooLongError(ValueError):
-    pass
+    def __init__(
+        self,
+        *,
+        input_kind: Literal["embedding", "reranker_query", "reranker_pair"],
+        input_index: int | None,
+        token_count: int,
+        token_limit: int,
+    ) -> None:
+        self.input_kind = input_kind
+        self.input_index = input_index
+        self.token_count = token_count
+        self.token_limit = token_limit
+        label = {
+            "embedding": "embedding input",
+            "reranker_query": "reranker query",
+            "reranker_pair": "reranker pair",
+        }[input_kind]
+        index = "" if input_index is None else f" {input_index}"
+        super().__init__(
+            f"{label}{index} has {token_count} tokens; "
+            f"maximum is {token_limit}"
+        )
 
 
 class ModelOutputError(RuntimeError):
@@ -229,7 +250,10 @@ def _validate_embedding_lengths(tokenizer: _Tokenizer, texts: list[str]) -> None
         count = len(_input_ids(tokenizer, text))
         if count > limit:
             raise InputTooLongError(
-                f"embedding input {index} has {count} tokens; maximum is {limit}"
+                input_kind="embedding",
+                input_index=index,
+                token_count=count,
+                token_limit=limit,
             )
 
 
@@ -240,13 +264,19 @@ def _validate_reranker_lengths(
     query_count = len(_input_ids(tokenizer, query, add_special_tokens=False))
     if query_count > limit:
         raise InputTooLongError(
-            f"reranker query has {query_count} tokens; maximum is {limit}"
+            input_kind="reranker_query",
+            input_index=None,
+            token_count=query_count,
+            token_limit=limit,
         )
     for index, text in enumerate(texts):
         pair_count = len(_input_ids(tokenizer, query, text_pair=text))
         if pair_count > limit:
             raise InputTooLongError(
-                f"reranker pair {index} has {pair_count} tokens; maximum is {limit}"
+                input_kind="reranker_pair",
+                input_index=index,
+                token_count=pair_count,
+                token_limit=limit,
             )
 
 
