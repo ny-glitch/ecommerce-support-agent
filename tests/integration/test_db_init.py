@@ -7,7 +7,15 @@ from sqlalchemy import func, inspect, select, text
 from sqlalchemy.exc import DBAPIError
 
 
-TABLE_NAMES = ("faq", "conversations", "messages", "tickets")
+TABLE_NAMES = (
+    "faq",
+    "conversations",
+    "messages",
+    "tickets",
+    "knowledge_chunks",
+    "qa_extraction_staging",
+    "low_confidence_questions",
+)
 
 
 @pytest.mark.asyncio
@@ -38,8 +46,82 @@ async def test_seed_is_idempotent_in_real_mysql(mysql_db) -> None:
         )
 
     assert set(tables) == set(TABLE_NAMES)
-    assert all(count > 0 for count in before)
+    assert all(count > 0 for count in before[:4])
+    assert before[4:] == (0, 0, 0)
     assert after == before
+
+
+@pytest.mark.asyncio
+async def test_mysql_knowledge_ddl_matches_authoritative_contract(mysql_db) -> None:
+    async with mysql_db.engine.connect() as connection:
+        columns = await connection.run_sync(
+            lambda sync_connection: {
+                column["name"]: column
+                for column in inspect(sync_connection).get_columns(
+                    "knowledge_chunks"
+                )
+            }
+        )
+        foreign_keys = await connection.run_sync(
+            lambda sync_connection: inspect(sync_connection).get_foreign_keys(
+                "knowledge_chunks"
+            )
+        )
+        table_comment = await connection.run_sync(
+            lambda sync_connection: inspect(sync_connection).get_table_comment(
+                "knowledge_chunks"
+            )["text"]
+        )
+        create_sql = (
+            await connection.execute(text("SHOW CREATE TABLE knowledge_chunks"))
+        ).one()[1]
+        staging_sql = (
+            await connection.execute(
+                text("SHOW CREATE TABLE qa_extraction_staging")
+            )
+        ).one()[1]
+        low_confidence_indexes = await connection.run_sync(
+            lambda sync_connection: inspect(sync_connection).get_indexes(
+                "low_confidence_questions"
+            )
+        )
+        low_confidence_unique = await connection.run_sync(
+            lambda sync_connection: inspect(sync_connection).get_unique_constraints(
+                "low_confidence_questions"
+            )
+        )
+
+    assert table_comment == "知识库 chunk 原文权威源"
+    assert columns["id"]["comment"] == "chunk 主键,与 Milvus 集合主键对齐"
+    assert columns["questions"]["comment"] == (
+        "问法或本节标题,多个问法换行分隔,进向量化文本"
+    )
+    assert "bigint unsigned" in create_sql.casefold()
+    assert "enum('pending','done')" in create_sql.casefold()
+    assert "on update current_timestamp" in create_sql.casefold()
+    assert "charset=utf8mb4" in create_sql.casefold()
+    assert "enum('extracted','kept','discarded')" in staging_sql.casefold()
+    assert "charset=utf8mb4" in staging_sql.casefold()
+    assert {
+        tuple(constraint["column_names"])
+        for constraint in low_confidence_unique
+    } == {("conversation_id", "turn_id")}
+    assert {
+        tuple(index["column_names"])
+        for index in low_confidence_indexes
+        if not index["unique"]
+    } == {("created_at",), ("reason_code",)}
+    assert {
+        (
+            foreign_key["constrained_columns"][0],
+            foreign_key["referred_table"],
+            foreign_key["options"].get("ondelete"),
+        )
+        for foreign_key in foreign_keys
+    } == {
+        ("prev_chunk_id", "knowledge_chunks", "SET NULL"),
+        ("next_chunk_id", "knowledge_chunks", "SET NULL"),
+    }
 
 
 @pytest.mark.asyncio

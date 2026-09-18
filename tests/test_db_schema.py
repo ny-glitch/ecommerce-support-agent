@@ -31,6 +31,40 @@ EXPECTED_COLUMNS = {
         "status",
         "created_at",
     },
+    "knowledge_chunks": {
+        "id",
+        "category",
+        "questions",
+        "answer",
+        "section_path",
+        "content_type",
+        "is_key_clause",
+        "prev_chunk_id",
+        "next_chunk_id",
+        "vector_id",
+        "vectorize_status",
+        "created_at",
+        "updated_at",
+    },
+    "qa_extraction_staging": {
+        "id",
+        "batch_no",
+        "source_ref",
+        "question",
+        "answer",
+        "status",
+        "created_at",
+    },
+    "low_confidence_questions": {
+        "id",
+        "original_question",
+        "conversation_id",
+        "turn_id",
+        "entry_point",
+        "reason_code",
+        "reason",
+        "created_at",
+    },
 }
 
 
@@ -103,6 +137,30 @@ def test_required_fields_constraints_foreign_keys_and_indexes() -> None:
     assert message_indexes == {
         ("conversation_id", "id"),
         ("conversation_id", "turn_id"),
+    }
+
+
+def test_knowledge_metadata_preserves_source_ddl_contract() -> None:
+    Base = load_db_module("models").Base
+    table = Base.metadata.tables["knowledge_chunks"]
+
+    assert table.comment == "知识库 chunk 原文权威源"
+    assert table.c.id.comment == "chunk 主键,与 Milvus 集合主键对齐"
+    assert table.c.questions.comment == (
+        "问法或本节标题,多个问法换行分隔,进向量化文本"
+    )
+    assert table.c.updated_at.server_default is not None
+    assert "ON UPDATE CURRENT_TIMESTAMP" in str(table.c.updated_at.server_default.arg)
+    assert {index.name for index in table.indexes} == {
+        "idx_category",
+        "idx_vectorize_status",
+    }
+    assert {
+        (foreign_key.parent.name, foreign_key.target_fullname, foreign_key.ondelete)
+        for foreign_key in table.foreign_keys
+    } == {
+        ("prev_chunk_id", "knowledge_chunks.id", "SET NULL"),
+        ("next_chunk_id", "knowledge_chunks.id", "SET NULL"),
     }
 
 

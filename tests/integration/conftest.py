@@ -53,6 +53,18 @@ def load_test_database_url(require_mysql: bool) -> str:
 
 async def clear_business_rows(db) -> None:
     async with db.engine.begin() as connection:
+        await connection.execute(
+            text(
+                "UPDATE knowledge_chunks "
+                "SET prev_chunk_id = NULL, next_chunk_id = NULL"
+            )
+        )
+        for table_name in (
+            "low_confidence_questions",
+            "qa_extraction_staging",
+            "knowledge_chunks",
+        ):
+            await connection.execute(text(f"DELETE FROM {table_name}"))
         for table_name in ("tickets", "messages", "conversations", "faq"):
             await connection.execute(text(f"DELETE FROM {table_name}"))
 
