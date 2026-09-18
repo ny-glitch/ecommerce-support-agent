@@ -345,9 +345,9 @@ hits = client.hybrid_search(collection_name, reqs, RRFRanker(k=60), limit=50,
 
 **Files:** Create `app/knowledge/query.py`、`app/knowledge/retrieval.py`、`app/knowledge/gateway.py`、`app/prompts/query_normalization.txt`、`tests/test_knowledge_query.py`、`tests/test_knowledge_retrieval.py`；Modify `app/knowledge/contracts.py`。
 
-**Interfaces:** contracts.py 新增 `QueryPlan(original:str,normalized:str,synonyms:tuple[str,...],category:str|None,fallback:bool=False)`、`RetrievalResult(query:QueryPlan,strategy:str,ranked:tuple[RankedChunk,...],raw_count:int,stale_count:int)`。`KnowledgeGateway(model:ChatOpenAI,*,chat_extra_body:dict).normalize(question:str)->NormalizationOutput` 为 async；NormalizationOutput 为 Pydantic 字段 normalized(max512)、synonyms(最多3项每项32字)。`QueryNormalizer(gateway).prepare(question:str,category:str|None,*,deadline:float)->QueryPlan` 为 async；`protected_terms_preserved(original:str,normalized:str)->bool` 为纯函数。`KnowledgeRetriever(repo,store,models).retrieve(plan:QueryPlan,strategy:Literal['dense','bm25','hybrid','hybrid_rerank'],*,deadline:float,emit:Callable[[str],Awaitable[None]]|None=None)->RetrievalResult` 为 async，在真实查询/重排开始前分别回调 retrieving/reranking，供pipeline转发真实进度。
+**Interfaces:** contracts.py 新增 `QueryPlan(original:str,normalized:str,synonyms:tuple[str,...],category:str|None,fallback:bool=False)`、`RetrievalResult(query:QueryPlan,strategy:str,ranked:tuple[RankedChunk,...],raw_count:int,stale_count:int)`。`KnowledgeGateway(model:ChatOpenAI,*,chat_extra_body:dict,settings:Settings).normalize(question:str)->NormalizationOutput` 为 async；NormalizationOutput 为 Pydantic 字段 normalized(max512)、synonyms(最多3项每项32字)。`QueryNormalizer(gateway).prepare(question:str,category:str|None,*,deadline:float)->QueryPlan` 为 async；`protected_terms_preserved(original:str,normalized:str)->bool` 为纯函数。`KnowledgeRetriever(repo,store,models).retrieve(plan:QueryPlan,strategy:Literal['dense','bm25','hybrid','hybrid_rerank'],*,deadline:float,emit:Callable[[str],Awaitable[None]]|None=None)->RetrievalResult` 为 async，在真实查询/重排开始前分别回调 retrieving/reranking，供pipeline转发真实进度。
 
-- [ ] **Step 1：写型号保护和策略纯度 RED。** 归一化替身只实现 normalize(question)，保存收到的 question；测试历史不在输入合同里、负词/数字/型号丢失时 fallback原文、同义词去重不写repo。检索替身在 tests/test_knowledge_retrieval.py 内定义同名 store/models async 方法，记录调用；dense 不调用 score/BM25，BM25 不调用 embed/score，hybrid 不调用 score。
+- [x] **Step 1：写型号保护和策略纯度 RED。** 归一化替身只实现 normalize(question)，保存收到的 question；测试历史不在输入合同里、负词/数字/型号丢失时 fallback原文、同义词去重不写repo。检索替身在 tests/test_knowledge_retrieval.py 内定义同名 store/models async 方法，记录调用；dense 不调用 score/BM25，BM25 不调用 embed/score，hybrid 不调用 score。
 
 ```python
 from app.knowledge.query import protected_terms_preserved
@@ -359,11 +359,11 @@ def test_rewrite_must_keep_model_and_negation():
 
 Run: `.venv/bin/python -m pytest tests/test_knowledge_query.py tests/test_knowledge_retrieval.py -q`。
 
-- [ ] **Step 2：实现只读本轮的改写模型。** 通过已有 ChatOpenAI 的 with_structured_output(method='json_mode',include_raw=True)，独立 PromptTemplate 明确 JSON 和禁止增加实体，只发 system+当前问题；不绑定业务 tools。Schema、finish_reason及原始JSON复核，失败仅回退一次。受保护项包含英数字型号、数字数值以及“不/不能/不支持/未/无”等否定类别；原文包含而归一化丢失则回退，不能依靠字符串子串判断让“不支持”变“支持”。
+- [x] **Step 2：实现只读本轮的改写模型。** 通过已有 ChatOpenAI 的 with_structured_output(method='json_mode',include_raw=True)，独立 PromptTemplate 明确 JSON 和禁止增加实体，只发 system+当前问题；不绑定业务 tools。Schema、finish_reason及原始JSON复核，失败仅回退一次。受保护项包含英数字型号、数字数值以及“不/不能/不支持/未/无”等否定类别；原文包含而归一化丢失则回退，不能依靠字符串子串判断让“不支持”变“支持”。
 
-BM25 输入为原文/标准问法/去重同义词拼成单条有界文本；密钥与额外模型参数复用现有受保护配置，不覆盖工具/输出限制。词典或规则修订通过独立校准样例评估，不针对正式题硬编码。
+BM25 输入为原文/标准问法/去重同义词拼成单条有界文本；密钥与额外模型参数复用现有受保护配置，不覆盖工具/输出限制。 构造器显式接收同一Settings；发归一化请求前按真实system+当前问题、输出预留和安全余量检查预算，不依赖工具选择阶段的另一份prompt预算。词典或规则修订通过独立校准样例评估，不针对正式题硬编码。
 
-- [ ] **Step 3：实现排名与原文验证。** store 返回 SearchHit，repo.get_many 后仅保留 done、同 hash 的 KnowledgeChunk，记录 stale_count；命中 ID 去重，固定同分按ID。hybrid_rerank 对与hybrid相同的50个候选score并完整返回排名；Top10截取留给Task6，使Recall@50可直接比较。
+- [x] **Step 3：实现排名与原文验证。** store 返回 SearchHit，repo.get_many 后仅保留 done、同 hash 的 KnowledgeChunk，记录 stale_count；命中 ID 去重，固定同分按ID。hybrid_rerank 对与hybrid相同的50个候选score并完整返回排名；Top10截取留给Task6，使Recall@50可直接比较。
 
 ```python
 valid = [hit for hit in hits if hit.id in originals
@@ -378,6 +378,9 @@ ranked.sort(key=lambda item: (-item.score, item.chunk.id))
 ```
 
 - [ ] **Step 4：GREEN、标注改写评估与提交。** 运行单测、真实四策略各一条检索及校准集改写标识保留检查；记录回退率和错误改写。评审后提交 `feat: add current-query understanding and four retrieval strategies`。
+
+
+执行状态：Task5代码及本地验证已独立评审通过；Step4中的真实30题DeepSeek改写评估因自动审批外发授权要求而等待用户回复，不算通过。后续任务可继续本地代码与替身测试，各自真实模型/Prompt/浏览器质量门槛保留为待完成；不得绕过外发拒绝，最终交付不得声称finish。
 
 ## Task 6：证据预算、充分性自评与受控拒答
 
@@ -405,7 +408,7 @@ def test_unknown_citation_is_generation_error():
 
 Run: `.venv/bin/python -m pytest tests/test_knowledge_evidence.py tests/test_knowledge_pipeline.py -q`。
 
-- [ ] **Step 2：实现预算与一次自评。** 生成 sources 时先按相关性编号，再做 edge_order。EvidenceBudget 构造真实最终 system/user/assistant-tool/ToolMessage，预留受限 assessment 等字段最多4096 UTF-8字节；使用已有 build_tool_context 估算并先裁剪旧完整轮次，不够才去掉排名末尾整块。工具结果JSON和模型输入分别校验，不把48000字节当成token预算。
+- [ ] **Step 2：实现预算与一次自评。** 生成 sources 时先按相关性编号，再做 edge_order。EvidenceBudget 构造真实最终 system/user/assistant-tool/ToolMessage，预留受限 assessment 等字段最多4096 UTF-8字节；使用已有 build_tool_context 估算并先裁剪旧完整轮次，不够才去掉排名末尾整块。工具结果JSON和模型输入分别校验，不把48000字节当成token预算。 模型输入同时检查实际自评请求（含system/schema、原话、标准问法、所选原文）和最终生成请求；两者都能容纳才调用自评，否则继续删最低排名整块，无法容纳则context_budget。
 
 ```python
 def edge_order(items):
