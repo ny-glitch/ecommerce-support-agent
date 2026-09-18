@@ -252,7 +252,7 @@ max_length 与 query/passage 联合长度以已下载 tokenizer 和模型限制�
 
 **Interfaces:** `MilvusStore(settings,*,collection_name:str|None=None)` 的 async 方法：ensure_schema()->None、upsert(chunks:list[KnowledgeChunk],vectors:list[list[float]],*,deadline:float)->None、fingerprints(ids:list[int])->dict[int,str]、search_dense(vector:list[float],category:str|None,*,deadline:float)->list[SearchHit]、search_bm25(text:str,category:str|None,*,deadline:float)->list[SearchHit]、search_hybrid(vector:list[float],text:str,category:str|None,*,deadline:float)->list[SearchHit]、check()->None、aclose()->None。`validate_test_collection(name:str)->None` 只接受 ch04_test_ 加32位十六进制UUID。`KnowledgeIndexer(repo,store,models,*,lock_path:Path).run(*,repair:bool=False)->dict[str,int]` 为 async，返回 indexed/skipped/failed 计数，任一失败 CLI 非零退出。
 
-- [ ] **Step 1：实现环境与测试隔离约束的 RED。** --require-milvus 配置必须存在服务，否则失败；测试集合为 ch04_test_<uuid>，清理函数拒绝不匹配此前缀的集合，尤其 knowledge。先写 indexer 的失败恢复测试：注入 upsert 成功而 mark_done 返回False/抛异常的仓储，再次运行只产生相同 ID 的 upsert，不能 done/新增不同主键。测试 store 的 schema 不兼容不 drop。
+- [x] **Step 1：实现环境与测试隔离约束的 RED。** --require-milvus 配置必须存在服务，否则失败；测试集合为 ch04_test_<uuid>，清理函数拒绝不匹配此前缀的集合，尤其 knowledge。先写 indexer 的失败恢复测试：注入 upsert 成功而 mark_done 返回False/抛异常的仓储，再次运行只产生相同 ID 的 upsert，不能 done/新增不同主键。测试 store 的 schema 不兼容不 drop。
 
 ```python
 import pytest
@@ -306,7 +306,7 @@ async def test_repeat_upsert_uses_same_id_after_unconfirmed_sql(tmp_path):
 
 Run: `.venv/bin/python -m pytest tests/test_knowledge_indexer.py tests/integration/test_knowledge_milvus.py --require-milvus -q`。环境缺失时先记录真实原因，不将 skip 算 GREEN。
 
-- [ ] **Step 2：增加 standalone 容器并验证版本。** 添加 knowledge-etcd/knowledge-minio/knowledge-milvus 服务、独立卷，内部地址用服务名，无全局 container_name；etcd/MinIO 不暴露宿主端口，Milvus 19530/9091 仅127.0.0.1。MinIO 凭据放忽略的 .env，通过环境项传给两个服务，不打印 Compose 渲染。采用对应官方 healthcheck、依赖健康等待，镜像版本如准备段；实际 docker image inspect 记录架构/digest，client.get_server_version 核对2.6.23。
+- [x] **Step 2：增加 standalone 容器并验证版本。** 添加 knowledge-etcd/knowledge-minio/knowledge-milvus 服务、独立卷，内部地址用服务名，无全局 container_name；etcd/MinIO 不暴露宿主端口，Milvus 19530/9091 仅127.0.0.1。MinIO 凭据放忽略的 .env，通过环境项传给两个服务，不打印 Compose 渲染。采用对应官方 healthcheck、依赖健康等待，镜像版本如准备段；实际 docker image inspect 记录架构/digest，client.get_server_version 核对2.6.23。
 
 ```bash
 /Applications/Docker.app/Contents/Resources/bin/docker compose up -d --wait knowledge-milvus
@@ -314,7 +314,7 @@ Run: `.venv/bin/python -m pytest tests/test_knowledge_indexer.py tests/integrati
 
 网络故障按具体 registry/DNS/代理错误排查；不从未知镜像源拉同名替代品。模型或镜像暂不可用时继续不依赖它的任务，但 Task4 不标完成。
 
-- [ ] **Step 3：实现 schema、预过滤与真实 hybrid API。** 底层使用同步 MilvusClient，通过有界线程调用并设置每次 RPC timeout；所有检索 Strong consistency。text max_length=65535，dense dim=1024，category/section字段按规格，BM25输出不由客户端填写。HNSW 设置 M=16/efConstruction=200，搜索 ef=100；SPARSE_INVERTED_INDEX 使用 BM25。collection已存在时比对字段/Function/analyzer/index，任何不兼容受控退出。
+- [x] **Step 3：实现 schema、预过滤与真实 hybrid API。** 底层使用同步 MilvusClient，通过有界线程调用并设置每次 RPC timeout；所有检索 Strong consistency。text max_length=65535，dense dim=1024，category/section字段按规格，BM25输出不由客户端填写。HNSW 设置 M=16/efConstruction=200，搜索 ef=100；SPARSE_INVERTED_INDEX 使用 BM25。collection已存在时比对字段/Function/analyzer/index，任何不兼容受控退出。
 
 ```python
 from pymilvus import AnnSearchRequest, RRFRanker
@@ -331,7 +331,7 @@ hits = client.hybrid_search(collection_name, reqs, RRFRanker(k=60), limit=50,
 
 表达式只允许固定 category 字段，使用 JSON 字符串编码；控制字符、引号和反斜杠有真实过滤测试，失败则改用SDK已核对的 expr_params，不允许直接 f-string 插原值。
 
-- [ ] **Step 4：实现索引器与恢复。** 本机索引 CLI 使用 `fcntl.flock(LOCK_EX|LOCK_NB)`，锁名在 tempfile.gettempdir() 下，以数据库host/port/database及Milvus集合名的SHA256作后缀，不含凭据；同一库从不同worktree运行也共享同一把锁。lock_path由CLI计算并注入，测试使用tmp_path。锁覆盖整个索引过程，退出释放；仅声明单机互斥。依次校验 ID/字节/模型 token 长度、upsert 确认、短事务 mark_done_if_current；普通模式扫描 pending，--repair 同时核查 done 行缺失/指纹失配后重置 pending。记录失效 ID，不泄露原文与密钥；取消后未确认行仍 pending。
+- [x] **Step 4：实现索引器与恢复。** 本机索引 CLI 使用 `fcntl.flock(LOCK_EX|LOCK_NB)`，锁名在 tempfile.gettempdir() 下，以数据库host/port/database及Milvus集合名的SHA256作后缀，不含凭据；同一库从不同worktree运行也共享同一把锁。lock_path由CLI计算并注入，测试使用tmp_path。锁覆盖整个索引过程，退出释放；仅声明单机互斥。依次校验 ID/字节/模型 token 长度、upsert 确认、短事务 mark_done_if_current；普通模式扫描 pending，--repair 同时核查 done 行缺失/指纹失配后重置 pending。记录失效 ID，不泄露原文与密钥；取消后未确认行仍 pending。
 
 ```bash
 .venv/bin/python scripts/index_knowledge.py
@@ -339,7 +339,7 @@ hits = client.hybrid_search(collection_name, reqs, RRFRanker(k=60), limit=50,
 .venv/bin/python -m pytest tests/test_knowledge_indexer.py tests/integration/test_knowledge_milvus.py --require-milvus --require-mysql -q
 ```
 
-- [ ] **Step 5：实证、评审、提交。** 在真实 Milvus 上 run_analyzer 检查型号/中英数字；BM25 查询C65-Pro命中目标；两路相同品类过滤；第二次索引不重复；构造过期原文验证恢复。写日志并提交 `feat: add native milvus bm25 and recoverable indexing`。
+- [x] **Step 5：实证、评审、提交。** 在真实 Milvus 上 run_analyzer 检查型号/中英数字；BM25 查询C65-Pro命中目标；两路相同品类过滤；第二次索引不重复；构造过期原文验证恢复。写日志并提交 `feat: add native milvus bm25 and recoverable indexing`。
 
 ## Task 5：当前问题归一化与四策略检索
 
@@ -385,7 +385,7 @@ ranked.sort(key=lambda item: (-item.score, item.chunk.id))
 
 **Interfaces:** `Citation` 为 Pydantic 模型，字段 number(int1..10)/chunk_id/category/section_path/questions/answer/content_hash/url/score；来自 Task1 原文，不由 LLM 填写。`EvidenceAssessment` 为 Pydantic 模型：sufficient(bool)、reason_code(Literal supported/insufficient_evidence/ambiguous_question)、reason(str最长600字符)、supporting_chunk_ids(list[int]最多10)。`EvidencePlan(sources:tuple[Citation,...],dropped_ids:tuple[int,...])` 不持有 DB Session。`KnowledgeDecision(query:QueryPlan,status:Literal['ok','not_found'],sources:tuple[Citation,...],assessment:EvidenceAssessment|None,reason_code:str|None,refusal:str|None)` 提供 to_payload()->dict，序列化后校验不超过48000字节。
 
-`KnowledgeGateway.assess(question:str,sources:tuple[Citation,...])->EvidenceAssessment`；`EvidenceBudget(settings,history:list[StoredTurn],question:str,call:AIMessage).select(ranked:tuple[RankedChunk,...],query:QueryPlan)->EvidencePlan`；`KnowledgePipeline(normalizer,retriever,gateway,threshold:float).run(question:str,category:str|None,budget:EvidenceBudget,*,deadline:float,emit:Callable[[str],Awaitable[None]])->KnowledgeDecision`。该流程默认 hybrid_rerank；评估通过同模块 `decide_evidence(query,retrieval,budget,*,threshold:float|None,deadline)->KnowledgeDecision` 复用预算/自评，前三策略 threshold=None。
+`KnowledgeGateway.assess(question:str,sources:tuple[Citation,...],*,normalized_question:str)->EvidenceAssessment`；`EvidenceBudget(settings,history:list[StoredTurn],question:str,call:AIMessage).select(ranked:tuple[RankedChunk,...],query:QueryPlan)->EvidencePlan`；`KnowledgePipeline(normalizer,retriever,gateway,threshold:float).run(question:str,category:str|None,budget:EvidenceBudget,*,deadline:float,emit:Callable[[str],Awaitable[None]])->KnowledgeDecision`。该流程默认 hybrid_rerank；评估通过同模块 `decide_evidence(query,retrieval,budget,*,gateway:KnowledgeGateway,threshold:float|None,deadline)->KnowledgeDecision` 复用预算/自评，前三策略 threshold=None。
 
 - [ ] **Step 1：写首尾布局、真实证据预算和拒答 RED。** 测试 sources 编号稳定、1与2位于首尾、预算只减整块、唯一一次 assess 实际收到裁剪后的集合；零命中/全 stale/低分提前拒答不调用 assess；无效支持 ID 受控错误，不能默认放行。测试 input 很长导致连一条都放不下时返回 context_budget。
 
