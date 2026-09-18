@@ -1,6 +1,6 @@
 """Transport cancellation and deadlines for service event iterators."""
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 
 from anyio import CancelScope
 from fastapi import Request
@@ -38,16 +38,20 @@ async def _close(upstream, pending) -> None:
 
 
 async def stream_events(
-    request: Request, upstream: AsyncIterator[ChatEvent], *, deadline: float
+    request: Request,
+    upstream: AsyncIterator[ChatEvent],
+    *,
+    deadline: float | Callable[[], float],
 ) -> AsyncIterator[ChatEvent]:
+    deadline_value = deadline if callable(deadline) else lambda: deadline
     pending = None
     try:
         while not await request.is_disconnected():
-            if asyncio.get_running_loop().time() >= deadline:
+            if asyncio.get_running_loop().time() >= deadline_value():
                 raise TimeoutError
             pending = asyncio.create_task(anext(upstream))
             while True:
-                remaining = deadline - asyncio.get_running_loop().time()
+                remaining = deadline_value() - asyncio.get_running_loop().time()
                 if remaining <= 0:
                     raise TimeoutError
                 ready, _ = await asyncio.wait({pending}, timeout=min(0.05, remaining))

@@ -27,7 +27,10 @@ class ToolHttpHarness:
                 owner.select_waiting.set()
                 try:
                     await owner.resume_select.wait()
-                    return selection("query_faq", {"keyword": "退货"})
+                    return selection("create_ticket", {
+                        "issue_description": "商品损坏",
+                        "ticket_type": "repair",
+                    })
                 finally:
                     owner.select_closed.set()
 
@@ -40,13 +43,13 @@ class ToolHttpHarness:
                         owner.close_waiting.set()
                         await owner.resume_close.wait()
 
-        class Faq:
-            async def search(self, keyword):
+        class Tickets:
+            async def create_once(self, *args):
                 owner.tool_waiting.set()
                 try:
                     await owner.resume_tool.wait()
                     owner.tool_finished.set()
-                    return []
+                    return {"ticket_no": args[0], "status": "pending"}
                 finally:
                     owner.tool_closed.set()
 
@@ -54,7 +57,7 @@ class ToolHttpHarness:
         self.app, _, self.conversations, self.service = http_app(
             settings(max_sessions=1, request_timeout_seconds=timeout), self.gateway
         )
-        self.service.faq = Faq()
+        self.service.tickets = Tickets()
         if phase != "select":
             self.resume_select.set()
         if phase == "final":
@@ -95,10 +98,10 @@ async def test_tool_status_is_visible_before_tool_finishes(tool_http_harness):
             assert (await next_event(lines))["event"] == "meta"
             event = await next_event(lines)
             assert event["event"] == "tool_status"
-            assert event["data"] == {"name": "query_faq", "tool_call_id": "call-1", "status": "running", "attempt": 1, "message": "工具正在执行"}
+            assert event["data"] == {"name": "create_ticket", "tool_call_id": "call-1", "status": "running", "attempt": 1, "message": "工具正在执行"}
             assert not h.tool_finished.is_set()
             h.resume_tool.set()
-            assert (await next_event(lines))["data"]["status"] == "not_found"
+            assert (await next_event(lines))["data"]["status"] == "succeeded"
             assert (await next_event(lines))["event"] == "token"
             assert not h.gateway.completed
             h.gateway.resume.set()

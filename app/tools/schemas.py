@@ -10,7 +10,6 @@ OrderId = Annotated[
     Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$"),
 ]
 ProductKeyword = Annotated[str, Field(min_length=1, max_length=100)]
-FaqKeyword = Annotated[str, Field(min_length=2, max_length=32)]
 IssueDescription = Annotated[str, Field(min_length=1, max_length=2000)]
 TicketType = Literal[
     "refund",
@@ -39,8 +38,8 @@ class LogisticsInput(ToolInput):
     order_id: OrderId
 
 
-class FaqInput(ToolInput):
-    keyword: FaqKeyword
+class KnowledgeInput(ToolInput):
+    pass
 
 
 class TicketInput(ToolInput):

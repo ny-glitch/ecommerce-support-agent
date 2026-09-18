@@ -19,7 +19,12 @@ from sqlalchemy.exc import (
 
 from app.errors import ServiceError
 from app.tools.registry import ToolRegistry
-from app.tools.results import InvalidToolArguments, TransientToolError, bounded_result
+from app.tools.results import (
+    InvalidToolArguments,
+    TransientToolError,
+    bounded_result,
+    validated_knowledge_result,
+)
 
 
 @dataclass(frozen=True)
@@ -28,6 +33,13 @@ class ToolProgress:
     tool_call_id: str
     status: str
     attempt: int
+    message: str
+
+
+@dataclass(frozen=True)
+class RetrievalProgress:
+    tool_call_id: str
+    stage: str
     message: str
 
 
@@ -102,7 +114,13 @@ class ToolExecutor:
 
     @classmethod
     def _successful_outcome(
-        cls, call_id: str, name: str, raw_message: object, attempt: int
+        cls,
+        call_id: str,
+        name: str,
+        raw_message: object,
+        attempt: int,
+        *,
+        max_bytes: int,
     ) -> ToolOutcome:
         if isinstance(raw_message, ToolMessage):
             raw_content = raw_message.content
@@ -143,11 +161,45 @@ class ToolExecutor:
             "not_found": "not_found",
             "error": "failed",
         }[payload["status"]]
+        if max_bytes > 4096:
+            if name != "query_faq":
+                return cls._outcome(
+                    call_id,
+                    name,
+                    {"status": "error", "code": "INVALID_TOOL_RESULT"},
+                    "failed",
+                    attempt,
+                )
+            try:
+                content = validated_knowledge_result(payload)
+            except ValueError:
+                return cls._outcome(
+                    call_id,
+                    name,
+                    {"status": "error", "code": "INVALID_TOOL_RESULT"},
+                    "failed",
+                    attempt,
+                )
+            return ToolOutcome(
+                ToolMessage(
+                    content=content,
+                    tool_call_id=call_id,
+                    name=name,
+                    status="success",
+                ),
+                terminal_status,
+                attempt,
+            )
         return cls._outcome(call_id, name, payload, terminal_status, attempt)
 
     async def run(
-        self, call: dict, registry: ToolRegistry, *, deadline: float
-    ) -> AsyncIterator[ToolProgress | ToolOutcome]:
+        self,
+        call: dict,
+        registry: ToolRegistry,
+        *,
+        deadline: float,
+        progress_queue: asyncio.Queue[RetrievalProgress] | None = None,
+    ) -> AsyncIterator[ToolProgress | RetrievalProgress | ToolOutcome]:
         call_id = str(call.get("id", ""))
         name = call.get("name")
         name = name if isinstance(name, str) else ""
@@ -170,8 +222,9 @@ class ToolExecutor:
                 0,
             )
             return
-
-        for attempt in range(1, self.max_attempts + 1):
+        policy = registry.policy(name)
+        max_attempts = policy.max_attempts or self.max_attempts
+        for attempt in range(1, max_attempts + 1):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 yield self._outcome(
@@ -202,9 +255,56 @@ class ToolExecutor:
                 )
                 return
 
+            args_schema = business_tool.args_schema
+            if isinstance(args_schema, type) and hasattr(args_schema, "model_validate"):
+                try:
+                    args_schema.model_validate(call["args"])
+                except ValidationError:
+                    yield self._outcome(
+                        call_id,
+                        name,
+                        {"status": "error", "code": "INVALID_TOOL_ARGUMENTS"},
+                        "failed",
+                        attempt,
+                    )
+                    return
+
+            invoke = asyncio.create_task(business_tool.ainvoke(call))
+            progress_get: asyncio.Task | None = None
+            attempt_deadline = (
+                deadline
+                if policy.shared_deadline
+                else min(deadline, time.monotonic() + self.timeout_seconds)
+            )
             try:
-                async with asyncio.timeout(min(self.timeout_seconds, remaining)):
-                    raw_message = await business_tool.ainvoke(call)
+                while not invoke.done():
+                    remaining = attempt_deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError
+                    if progress_queue is None:
+                        done, _ = await asyncio.wait({invoke}, timeout=remaining)
+                    else:
+                        progress_get = asyncio.create_task(progress_queue.get())
+                        done, _ = await asyncio.wait(
+                            {invoke, progress_get},
+                            timeout=remaining,
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                    if not done:
+                        raise TimeoutError
+                    if progress_get is not None and progress_get in done:
+                        progress = progress_get.result()
+                        progress_get = None
+                        yield progress
+                        continue
+                    if progress_get is not None:
+                        progress_get.cancel()
+                        await asyncio.gather(progress_get, return_exceptions=True)
+                        progress_get = None
+                raw_message = invoke.result()
+                if progress_queue is not None:
+                    while not progress_queue.empty():
+                        yield progress_queue.get_nowait()
             except asyncio.CancelledError:
                 raise
             except (ValidationError, InvalidToolArguments):
@@ -227,7 +327,7 @@ class ToolExecutor:
                         attempt,
                     )
                     return
-                if attempt == self.max_attempts:
+                if attempt == max_attempts:
                     yield self._outcome(
                         call_id,
                         name,
@@ -250,7 +350,7 @@ class ToolExecutor:
                 if self._is_transient(error):
                     if time.monotonic() >= deadline:
                         code = "TOOL_DEADLINE_EXCEEDED"
-                    elif attempt < self.max_attempts:
+                    elif attempt < max_attempts:
                         continue
                     else:
                         code = "TOOL_TEMPORARY_FAILURE"
@@ -264,6 +364,19 @@ class ToolExecutor:
                     attempt,
                 )
                 return
+            finally:
+                if progress_get is not None:
+                    progress_get.cancel()
+                    await asyncio.gather(progress_get, return_exceptions=True)
+                if not invoke.done():
+                    invoke.cancel()
+                await asyncio.gather(invoke, return_exceptions=True)
 
-            yield self._successful_outcome(call_id, name, raw_message, attempt)
+            yield self._successful_outcome(
+                call_id,
+                name,
+                raw_message,
+                attempt,
+                max_bytes=policy.max_bytes,
+            )
             return

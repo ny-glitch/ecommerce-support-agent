@@ -20,41 +20,15 @@ async def execute(registry, name: str, args: dict, call_id: str = "call-1") -> T
     return outcome
 
 
-async def test_faq_does_not_rewrite_synonym(repos, new_turn) -> None:
+async def test_query_faq_requires_the_new_knowledge_dependency(repos, new_turn) -> None:
     _, faq, tickets = repos
     ctx = ToolContext(new_turn, "demo", "邮费是多少", "TK-test")
     registry = build_registry(ctx, faq, tickets)
 
-    result = await execute(registry, "query_faq", {"keyword": "运费"})
+    result = await execute(registry, "query_faq", {})
 
-    assert json.loads(result.message.content)["code"] == "INVALID_TOOL_ARGUMENTS"
+    assert json.loads(result.message.content)["code"] == "KNOWLEDGE_UNAVAILABLE"
     assert result.attempt == 1
-
-
-async def test_faq_literal_synonym_reaches_sql_and_returns_not_found(
-    repos, new_turn
-) -> None:
-    _, faq, tickets = repos
-    ctx = ToolContext(new_turn, "demo", "邮费是多少", "TK-test")
-    registry = build_registry(ctx, faq, tickets)
-
-    result = await execute(registry, "query_faq", {"keyword": "邮费"})
-
-    payload = json.loads(result.message.content)
-    assert payload == {"status": "not_found", "data": []}
-    assert result.terminal_status == "not_found"
-
-
-async def test_faq_literal_match_returns_seed_row(repos, new_turn) -> None:
-    _, faq, tickets = repos
-    ctx = ToolContext(new_turn, "demo", "请问退货政策是什么", "TK-test")
-    registry = build_registry(ctx, faq, tickets)
-
-    result = await execute(registry, "query_faq", {"keyword": "退货政策"})
-
-    payload = json.loads(result.message.content)
-    assert payload["status"] == "ok"
-    assert [row["question"] for row in payload["data"]] == ["退货政策"]
 
 
 async def test_create_ticket_is_idempotent_for_context_ticket_number(

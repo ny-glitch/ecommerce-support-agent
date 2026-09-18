@@ -5,11 +5,13 @@ import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
+import json
 import logging
 from typing import Literal, TypeVar
 from uuid import uuid4
 
 from anyio import CancelScope
+from langchain_core.messages import AIMessage
 
 from app.config import Settings
 from app.context import ToolContextWindow, build_tool_context
@@ -18,12 +20,23 @@ from app.db.conversations import ConversationRepository
 from app.db.faq import FaqRepository
 from app.db.tickets import TicketRepository
 from app.errors import ServiceError
+from app.knowledge.contracts import KnowledgeDecision
+from app.knowledge.evidence import (
+    build_knowledge_tool_message,
+    validate_citation_numbers,
+)
 from app.model import ModelGateway
-from app.prompts import tool_chat_system_prompt
+from app.prompts import knowledge_answer_system_prompt, tool_chat_system_prompt
 from app.services.events import ChatEvent
+from app.services.knowledge_turn import KnowledgeTurnRunner
 from app.sessions import SessionGuard
 from app.tools.business import ToolContext, build_registry
-from app.tools.executor import ToolExecutor, ToolOutcome, ToolProgress
+from app.tools.executor import (
+    RetrievalProgress,
+    ToolExecutor,
+    ToolOutcome,
+    ToolProgress,
+)
 from app.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -33,10 +46,14 @@ T = TypeVar("T")
 @dataclass
 class PreparedTurn:
     ref: TurnRef
+    started_at: float
     deadline: float
     window: ToolContextWindow
     registry: ToolRegistry
     message: str
+    category: str | None = None
+    knowledge_decision: KnowledgeDecision | None = None
+    _knowledge_state: dict[str, object] = field(default_factory=dict, repr=False)
     _parts: list[str] = field(default_factory=list, repr=False)
     _iterators: list = field(default_factory=list, repr=False)
     _operations: set[asyncio.Task] = field(default_factory=set, repr=False)
@@ -87,11 +104,32 @@ def _safe_error(error: Exception) -> ServiceError:
     return ServiceError("DB_ERROR", "服务暂时无法保存会话，请稍后重试", 503)
 
 
+_RETRIEVAL_MESSAGES = {
+    "normalizing": "正在理解问题",
+    "retrieving": "正在检索知识",
+    "reranking": "正在筛选相关证据",
+    "checking_evidence": "正在核对证据充分性",
+}
+
+
+def _knowledge_error(code: str) -> ServiceError:
+    messages = {
+        "KNOWLEDGE_UNAVAILABLE": "知识服务暂时不可用",
+        "DATABASE_ERROR": "数据库操作失败",
+        "EVIDENCE_ASSESSMENT_ERROR": "证据充分性校验失败，请重试",
+        "TOOL_DEADLINE_EXCEEDED": "知识服务响应超时，请重试",
+        "INVALID_TOOL_ARGUMENTS": "知识工具调用格式无效，请重试",
+        "INVALID_TOOL_RESULT": "知识工具返回格式无效，请重试",
+    }
+    return ServiceError(code, messages.get(code, "知识服务暂时不可用"), 502)
+
+
 class ChatService:
     def __init__(
         self, settings: Settings, gateway: ModelGateway,
         conversations: ConversationRepository, faq: FaqRepository,
         tickets: TicketRepository, guard: SessionGuard, executor: ToolExecutor,
+        *, knowledge_pipeline=None, low_confidence=None,
     ) -> None:
         self.settings = settings
         self.gateway = gateway
@@ -100,30 +138,80 @@ class ChatService:
         self.tickets = tickets
         self.guard = guard
         self.executor = executor
+        self.knowledge_runner = (
+            KnowledgeTurnRunner(knowledge_pipeline, low_confidence, settings)
+            if knowledge_pipeline is not None and low_confidence is not None
+            else None
+        )
         self._cleanup_tasks: set[asyncio.Task] = set()
 
     @asynccontextmanager
     async def prepare(
-        self, message: str, session_id: str | None, user_id: str = "demo"
+        self,
+        message: str,
+        session_id: str | None,
+        user_id: str = "demo",
+        *,
+        category: str | None = None,
     ) -> AsyncIterator[PreparedTurn]:
-        deadline = asyncio.get_running_loop().time() + self.settings.request_timeout_seconds
+        started_at = asyncio.get_running_loop().time()
+        deadline = started_at + self.settings.request_timeout_seconds
         if not message.strip():
             raise ServiceError("INVALID_REQUEST", "请求参数无效", 422)
         ref = TurnRef(session_id or str(uuid4()), str(uuid4()))
         self.guard.acquire(ref.conversation_id)
         prepared = None
+        knowledge_state: dict[str, object] = {}
         status: Literal["failed", "cancelled"] = "cancelled"
         try:
+            async def knowledge_call() -> str:
+                current = knowledge_state.get("prepared")
+                call = knowledge_state.get("call")
+                queue = knowledge_state.get("queue")
+                if (
+                    self.knowledge_runner is None
+                    or not isinstance(current, PreparedTurn)
+                    or not isinstance(call, AIMessage)
+                    or not isinstance(queue, asyncio.Queue)
+                ):
+                    raise ServiceError(
+                        "KNOWLEDGE_UNAVAILABLE",
+                        "知识服务暂时不可用",
+                        503,
+                    )
+                call_id = call.tool_calls[0]["id"]
+
+                async def emit(stage: str) -> None:
+                    message_text = _RETRIEVAL_MESSAGES.get(stage)
+                    if message_text is None:
+                        raise ValueError("unknown retrieval stage")
+                    await queue.put(RetrievalProgress(call_id, stage, message_text))
+
+                decision = await self.knowledge_runner.execute(current, call, emit)
+                current.knowledge_decision = decision
+                return str(build_knowledge_tool_message(call, decision).content)
+
             registry = build_registry(
                 ToolContext(ref, user_id, message, "TK-" + uuid4().hex),
                 self.faq, self.tickets,
+                knowledge_call=(knowledge_call if self.knowledge_runner is not None else None),
             )
             prompt = tool_chat_system_prompt()
             # Required inputs must fit before creating any durable state.
             window = build_tool_context(
                 prompt, [], message, self.settings, tool_schemas=registry.schemas()
             )
-            prepared = PreparedTurn(ref, deadline, window, registry, message)
+            prepared = PreparedTurn(
+                ref,
+                started_at,
+                deadline,
+                window,
+                registry,
+                message,
+                category,
+            )
+            prepared._knowledge_state = knowledge_state
+            knowledge_state["prepared"] = prepared
             if session_id is not None:
                 owner = await _bounded(
                     lambda: self.conversations.get(session_id, user_id), deadline,
@@ -261,7 +349,26 @@ class ChatService:
                     prepared.deadline, prepared._operations,
                     mutations=prepared._mutations,
                 )
-                execution = self.executor.run(calls[0], prepared.registry, deadline=prepared.deadline)
+                is_knowledge = calls[0]["name"] == "query_faq"
+                progress_queue = None
+                if is_knowledge:
+                    prepared.deadline = (
+                        prepared.started_at
+                        + self.settings.knowledge_request_timeout_seconds
+                    )
+                    progress_queue = asyncio.Queue(maxsize=8)
+                    knowledge_state = prepared._knowledge_state
+                    # The prepare closure and stream share this dictionary by reference.
+                    if not knowledge_state:
+                        raise ServiceError("KNOWLEDGE_UNAVAILABLE", "知识服务暂时不可用", 503)
+                    knowledge_state["call"] = decision
+                    knowledge_state["queue"] = progress_queue
+                execution = self.executor.run(
+                    calls[0],
+                    prepared.registry,
+                    deadline=prepared.deadline,
+                    progress_queue=progress_queue,
+                )
                 prepared._iterators.append(execution)
                 while True:
                     try:
@@ -285,10 +392,56 @@ class ChatService:
                             ),
                         )
                         yield ChatEvent("tool_status", asdict(progress))
+                        if is_knowledge and event.terminal_status == "failed":
+                            payload = json.loads(str(event.message.content))
+                            raise _knowledge_error(str(payload.get("code", "KNOWLEDGE_UNAVAILABLE")))
+                    elif isinstance(event, RetrievalProgress):
+                        yield ChatEvent("retrieval_status", asdict(event))
                     else:
                         yield ChatEvent("tool_status", asdict(event))
+                if is_knowledge:
+                    knowledge = prepared.knowledge_decision
+                    if knowledge is None or len(current_tool_messages) != 2:
+                        raise ServiceError(
+                            "INVALID_TOOL_RESULT",
+                            "知识工具返回格式无效，请重试",
+                            502,
+                        )
+                    if knowledge.status == "not_found":
+                        content = knowledge.refusal or ""
+                        prepared._parts.append(content)
+                        await _bounded(
+                            lambda: self.conversations.finish_turn(
+                                prepared.ref, content, "completed"
+                            ),
+                            prepared.deadline,
+                            prepared._operations,
+                            mutations=prepared._mutations,
+                        )
+                        prepared._finalized = True
+                        yield ChatEvent("refusal", {
+                            "content": content,
+                            "reason_code": knowledge.reason_code,
+                        })
+                        yield ChatEvent("done", {
+                            "session_id": prepared.ref.conversation_id,
+                            "refused": True,
+                            "citations": [],
+                        })
+                        return
+                    yield ChatEvent("sources", {
+                        "sources": [
+                            source.model_dump(mode="json")
+                            for source in knowledge.sources
+                        ]
+                    })
             final_window = build_tool_context(
-                tool_chat_system_prompt(), prepared.window.retained_turns,
+                (
+                    knowledge_answer_system_prompt()
+                    if prepared.knowledge_decision is not None
+                    else tool_chat_system_prompt()
+                ),
+                prepared.window.retained_turns,
                 prepared.message, self.settings, tool_schemas=[],
                 current_tool_messages=current_tool_messages,
             )
@@ -307,13 +460,32 @@ class ChatService:
             content = "".join(prepared._parts)
             if not content.strip():
                 raise ServiceError("UPSTREAM_INCOMPLETE", "模型回复未正常完成，请重试", 502)
+            used_citations: list[int] = []
+            if prepared.knowledge_decision is not None:
+                allowed = {
+                    source.number for source in prepared.knowledge_decision.sources
+                }
+                try:
+                    used_citations = sorted(
+                        validate_citation_numbers(content, allowed)
+                    )
+                except ValueError as exc:
+                    raise ServiceError(
+                        "INVALID_CITATION",
+                        "知识回答引用无效，请重试",
+                        502,
+                    ) from exc
             await _bounded(
                 lambda: self.conversations.finish_turn(prepared.ref, content, "completed"),
                 prepared.deadline, prepared._operations,
                 mutations=prepared._mutations,
             )
             prepared._finalized = True
-            yield ChatEvent("done", {"session_id": prepared.ref.conversation_id})
+            yield ChatEvent("done", {
+                "session_id": prepared.ref.conversation_id,
+                "refused": False,
+                "citations": used_citations,
+            })
         except (asyncio.CancelledError, GeneratorExit):
             await self._cleanup(prepared, "cancelled")
             raise

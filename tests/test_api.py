@@ -31,7 +31,11 @@ def test_chat_reuses_complete_turns_and_returns_readable_sse():
         assert metadata["token_count_is_estimate"] is True
         assert metadata["dropped_turns"] == 0
         assert [e["data"]["content"] for e in events if e["event"] == "token"] == ["你好", "，小林"]
-        assert events[-1]["data"] == {"session_id": sid}
+        assert events[-1]["data"] == {
+            "session_id": sid,
+            "refused": False,
+            "citations": [],
+        }
         second = client.post("/api/chat", json={"message": "我叫什么？", "session_id": sid})
         assert second.status_code == 200
         assert [(m.type, m.content) for m in gateway.calls[-1]][1:] == [

@@ -4,8 +4,18 @@ from copy import deepcopy
 import json
 from typing import Any
 
+from pydantic import ValidationError
+
+from app.knowledge.contracts import (
+    Citation,
+    EvidenceAssessment,
+    KnowledgeDecision,
+    QueryPlan,
+)
+
 
 MAX_TOOL_RESULT_BYTES = 4096
+MAX_KNOWLEDGE_RESULT_BYTES = 48_000
 _ESSENTIAL_KEYS = {
     "status",
     "code",
@@ -108,3 +118,38 @@ def bounded_result(payload: dict[str, Any]) -> str:
     if _fits(reduced):
         return _serialize(reduced)
     return _serialize(_fallback(reduced))
+
+
+def validated_knowledge_result(payload: dict[str, Any]) -> str:
+    """Validate and canonically serialize the sole large-result contract."""
+    if set(payload) != {
+        "status",
+        "query",
+        "sources",
+        "assessment",
+        "reason_code",
+        "refusal",
+    }:
+        raise ValueError("invalid knowledge result keys")
+    try:
+        query = QueryPlan(**payload["query"])
+        sources = tuple(Citation.model_validate(item) for item in payload["sources"])
+        assessment = (
+            None
+            if payload["assessment"] is None
+            else EvidenceAssessment.model_validate(payload["assessment"])
+        )
+        decision = KnowledgeDecision(
+            query=query,
+            status=payload["status"],
+            sources=sources,
+            assessment=assessment,
+            reason_code=payload["reason_code"],
+            refusal=payload["refusal"],
+        )
+        canonical = _serialize(decision.to_payload())
+    except (KeyError, TypeError, ValidationError) as exc:
+        raise ValueError("invalid knowledge result") from exc
+    if len(canonical.encode("utf-8")) > MAX_KNOWLEDGE_RESULT_BYTES:
+        raise ValueError("knowledge result too large")
+    return canonical

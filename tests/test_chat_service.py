@@ -66,7 +66,6 @@ async def test_malformed_selection_never_executes(chat_harness, kind):
 @pytest.mark.parametrize(("name", "args", "code"), [
     ("query_logistics", {}, "INVALID_TOOL_ARGUMENTS"),
     ("unknown", {}, "UNKNOWN_TOOL"),
-    ("query_faq", {"keyword": "邮费"}, None),
 ])
 async def test_error_or_not_found_tool_feedback_converges(chat_harness, name, args, code):
     h = chat_harness

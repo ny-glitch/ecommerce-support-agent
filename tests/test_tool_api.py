@@ -69,14 +69,17 @@ def test_tool_failure_status_never_exposes_exception_or_database_url():
     app, gateway, _, service = http_app()
 
     async def choose(messages, tools):
-        return selection("query_faq", {"keyword": "退货"})
+        return selection("create_ticket", {
+            "issue_description": "退货",
+            "ticket_type": "return_refund",
+        })
 
-    class BrokenFaq:
-        async def search(self, keyword):
+    class BrokenTickets:
+        async def create_once(self, *args):
             raise RuntimeError("mysql+asyncmy://secret-user:secret-password@db/customer")
 
     gateway.select = choose
-    service.faq = BrokenFaq()
+    service.tickets = BrokenTickets()
     with TestClient(app) as client:
         response = client.post("/api/chat", json={"message": "退货"})
     statuses = [e["data"] for e in parse_sse(response.text) if e["event"] == "tool_status"]

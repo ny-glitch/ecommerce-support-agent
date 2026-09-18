@@ -69,7 +69,14 @@ async def test_first_token_arrives_before_upstream_is_allowed_to_finish():
                 assert not gateway.completed
                 gateway.resume.set()
                 assert await next_event(lines) == {"event": "token", "data": {"content": "第二段"}}
-                assert await next_event(lines) == {"event": "done", "data": {"session_id": metadata["data"]["session_id"]}}
+                assert await next_event(lines) == {
+                    "event": "done",
+                    "data": {
+                        "session_id": metadata["data"]["session_id"],
+                        "refused": False,
+                        "citations": [],
+                    },
+                }
             assert gateway.completed
         finally:
             gateway.resume.set()

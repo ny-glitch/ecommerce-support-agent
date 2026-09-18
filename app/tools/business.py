@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import hashlib
@@ -10,10 +11,11 @@ from langchain_core.tools import tool
 from app.db.contracts import TurnRef
 from app.db.faq import FaqRepository
 from app.db.tickets import TicketRepository
-from app.tools.registry import ToolRegistry
-from app.tools.results import InvalidToolArguments, bounded_result
+from app.errors import ServiceError
+from app.tools.registry import ToolPolicy, ToolRegistry
+from app.tools.results import bounded_result
 from app.tools.schemas import (
-    FaqInput,
+    KnowledgeInput,
     LogisticsInput,
     OrderInput,
     ProductInput,
@@ -35,6 +37,7 @@ def build_registry(
     tickets: TicketRepository,
     *,
     rng: random.Random | None = None,
+    knowledge_call: Callable[[], Awaitable[str]] | None = None,
 ) -> ToolRegistry:
     random_source = rng if rng is not None else random.Random()
 
@@ -106,15 +109,16 @@ def build_registry(
             }
         )
 
-    @tool(args_schema=FaqInput)
-    async def query_faq(keyword: str) -> str:
-        """按用户原文的主题关键词查本店FAQ，不改写同义词。"""
-        if keyword not in context.user_message:
-            raise InvalidToolArguments("keyword must be a literal substring")
-        rows = await faq.search(keyword)
-        return bounded_result(
-            {"status": "ok" if rows else "not_found", "data": rows}
-        )
+    @tool(args_schema=KnowledgeInput)
+    async def query_faq() -> str:
+        """查询本店政策、商品型号规格和使用说明；自动使用本轮原始问题。"""
+        if knowledge_call is None:
+            raise ServiceError(
+                "KNOWLEDGE_UNAVAILABLE",
+                "知识服务暂时不可用",
+                503,
+            )
+        return await knowledge_call()
 
     @tool(args_schema=TicketInput)
     async def create_ticket(issue_description: str, ticket_type: str) -> str:
@@ -129,5 +133,12 @@ def build_registry(
         return bounded_result({"status": "ok", "data": ticket})
 
     return ToolRegistry(
-        [query_order, query_product, query_logistics, query_faq, create_ticket]
+        [query_order, query_product, query_logistics, query_faq, create_ticket],
+        policies={
+            "query_faq": ToolPolicy(
+                max_bytes=48_000,
+                max_attempts=1,
+                shared_deadline=True,
+            )
+        },
     )
