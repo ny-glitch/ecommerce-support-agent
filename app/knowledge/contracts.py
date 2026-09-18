@@ -30,3 +30,21 @@ class SearchHit:
 class RankedChunk:
     chunk: KnowledgeChunk
     score: float
+
+
+@dataclass(frozen=True)
+class QueryPlan:
+    original: str
+    normalized: str
+    synonyms: tuple[str, ...]
+    category: str | None
+    fallback: bool = False
+
+
+@dataclass(frozen=True)
+class RetrievalResult:
+    query: QueryPlan
+    strategy: str
+    ranked: tuple[RankedChunk, ...]
+    raw_count: int
+    stale_count: int

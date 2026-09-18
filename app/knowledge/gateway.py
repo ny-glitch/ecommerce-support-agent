@@ -1,0 +1,106 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any, Annotated
+
+import openai
+from langchain_core.prompts import PromptTemplate
+from langchain_openai import ChatOpenAI
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
+
+from app.config import Settings
+from app.context import build_context
+
+
+_PROMPT_PATH = Path(__file__).parents[1] / "prompts" / "query_normalization.txt"
+_Normalized = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=512),
+]
+_Synonym = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=32),
+]
+
+
+class NormalizationOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    normalized: _Normalized
+    synonyms: tuple[_Synonym, ...] = Field(default=(), max_length=3)
+
+
+class NormalizationRequestError(RuntimeError):
+    pass
+
+
+class NormalizationResponseError(ValueError):
+    pass
+
+
+class KnowledgeGateway:
+    def __init__(
+        self,
+        model: ChatOpenAI,
+        *,
+        chat_extra_body: dict[str, Any],
+        settings: Settings,
+    ) -> None:
+        template = PromptTemplate.from_template(_PROMPT_PATH.read_text(encoding="utf-8"))
+        self._system_prompt = template.format(
+            schema_json=json.dumps(
+                NormalizationOutput.model_json_schema(),
+                ensure_ascii=False,
+            )
+        )
+        self._normalizer = model.with_structured_output(
+            NormalizationOutput,
+            method="json_mode",
+            include_raw=True,
+            extra_body=dict(chat_extra_body),
+        )
+        self._settings = settings
+
+    async def normalize(self, question: str) -> NormalizationOutput:
+        messages = build_context(
+            self._system_prompt,
+            [],
+            question,
+            self._settings,
+        ).messages
+        try:
+            result = await self._normalizer.ainvoke(messages)
+        except (
+            openai.ContentFilterFinishReasonError,
+            openai.LengthFinishReasonError,
+        ) as exc:
+            raise NormalizationResponseError(
+                "invalid structured normalization response"
+            ) from exc
+        except Exception as exc:
+            raise NormalizationRequestError("normalization request failed") from exc
+        try:
+            raw = result["raw"]
+            content = raw.content
+            finish_reason = raw.response_metadata.get("finish_reason")
+            parsed = result["parsed"]
+            if (
+                finish_reason != "stop"
+                or not isinstance(content, str)
+                or not content.strip()
+                or result["parsing_error"] is not None
+                or not isinstance(parsed, NormalizationOutput)
+            ):
+                raise ValueError("incomplete or unparseable structured normalization")
+            decoded = json.loads(content)
+            if not isinstance(decoded, dict):
+                raise ValueError("structured normalization must be a JSON object")
+            validated = NormalizationOutput.model_validate(decoded)
+            if validated != parsed:
+                raise ValueError("parsed normalization does not match raw JSON")
+            return validated
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError, ValidationError) as exc:
+            raise NormalizationResponseError(
+                "invalid structured normalization response"
+            ) from exc

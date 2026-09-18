@@ -1,0 +1,257 @@
+{
+  "schema_version": 1,
+  "generated_at_utc": "2026-09-18T13:48:33.483264+00:00",
+  "provenance": {
+    "git_commit": "f66e10082ffe343a7a679289b7128d9217aaceb7",
+    "calibration_path": "evals/ch04/calibration.jsonl",
+    "calibration_sha256": "e5bf83c93712e3cd858bb22a42670ae0d90412277a1764d1f2cb8834b7c4d6c3",
+    "formal_test_used": false,
+    "query_plan_source": "hand-authored from calibration case cal-model-01; no formal-test tuning",
+    "pymilvus_version": "2.6.17",
+    "embedding_model": "BAAI/bge-m3",
+    "embedding_revision": "5617a9f61b028005a4858fdac845db406aefb181",
+    "reranker_model": "BAAI/bge-reranker-v2-m3",
+    "reranker_revision": "953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e",
+    "milvus_collection": "knowledge",
+    "offline_local_models": true
+  },
+  "query": {
+    "query_id": "cal-model-01",
+    "original": "单独用 C65-Pro 的 C2 口，最多能到多少瓦？",
+    "normalized": "C65-Pro 的 C2 接口单独使用时最高输出功率是多少？",
+    "synonyms": [
+      "C2 单口功率",
+      "C2 口最大瓦数"
+    ],
+    "category": "数码配件/充电器"
+  },
+  "results": [
+    {
+      "strategy": "dense",
+      "events": [
+        "retrieving"
+      ],
+      "raw_count": 24,
+      "stale_count": 0,
+      "ranked_count": 24,
+      "top_10": [
+        {
+          "id": 910003,
+          "score": 0.74744999
+        },
+        {
+          "id": 910004,
+          "score": 0.72731841
+        },
+        {
+          "id": 910005,
+          "score": 0.68268317
+        },
+        {
+          "id": 910002,
+          "score": 0.65423495
+        },
+        {
+          "id": 910012,
+          "score": 0.6418708
+        },
+        {
+          "id": 910008,
+          "score": 0.63239843
+        },
+        {
+          "id": 910007,
+          "score": 0.61678588
+        },
+        {
+          "id": 910022,
+          "score": 0.57599658
+        },
+        {
+          "id": 910001,
+          "score": 0.56006396
+        },
+        {
+          "id": 910013,
+          "score": 0.5529514
+        }
+      ],
+      "expected_ids": [
+        910003
+      ],
+      "expected_recalled_at_50": true,
+      "elapsed_seconds": 2.519
+    },
+    {
+      "strategy": "bm25",
+      "events": [
+        "retrieving"
+      ],
+      "raw_count": 22,
+      "stale_count": 0,
+      "ranked_count": 22,
+      "top_10": [
+        {
+          "id": 910003,
+          "score": 68.32788086
+        },
+        {
+          "id": 910004,
+          "score": 42.30503845
+        },
+        {
+          "id": 910005,
+          "score": 27.10069084
+        },
+        {
+          "id": 910001,
+          "score": 22.60577393
+        },
+        {
+          "id": 910002,
+          "score": 21.38605118
+        },
+        {
+          "id": 910022,
+          "score": 18.57179642
+        },
+        {
+          "id": 910024,
+          "score": 18.55469894
+        },
+        {
+          "id": 910008,
+          "score": 16.96624374
+        },
+        {
+          "id": 910007,
+          "score": 16.41813087
+        },
+        {
+          "id": 910021,
+          "score": 14.70813465
+        }
+      ],
+      "expected_ids": [
+        910003
+      ],
+      "expected_recalled_at_50": true,
+      "elapsed_seconds": 0.015
+    },
+    {
+      "strategy": "hybrid",
+      "events": [
+        "retrieving"
+      ],
+      "raw_count": 24,
+      "stale_count": 0,
+      "ranked_count": 24,
+      "top_10": [
+        {
+          "id": 910003,
+          "score": 0.03278688
+        },
+        {
+          "id": 910004,
+          "score": 0.03225806
+        },
+        {
+          "id": 910005,
+          "score": 0.03174603
+        },
+        {
+          "id": 910002,
+          "score": 0.03100961
+        },
+        {
+          "id": 910001,
+          "score": 0.03011775
+        },
+        {
+          "id": 910008,
+          "score": 0.0298574
+        },
+        {
+          "id": 910022,
+          "score": 0.0298574
+        },
+        {
+          "id": 910007,
+          "score": 0.02941813
+        },
+        {
+          "id": 910024,
+          "score": 0.02900988
+        },
+        {
+          "id": 910012,
+          "score": 0.02854251
+        }
+      ],
+      "expected_ids": [
+        910003
+      ],
+      "expected_recalled_at_50": true,
+      "elapsed_seconds": 0.265
+    },
+    {
+      "strategy": "hybrid_rerank",
+      "events": [
+        "retrieving",
+        "reranking"
+      ],
+      "raw_count": 24,
+      "stale_count": 0,
+      "ranked_count": 24,
+      "top_10": [
+        {
+          "id": 910003,
+          "score": 0.99951316
+        },
+        {
+          "id": 910004,
+          "score": 0.99876159
+        },
+        {
+          "id": 910005,
+          "score": 0.82098727
+        },
+        {
+          "id": 910008,
+          "score": 0.77917101
+        },
+        {
+          "id": 910002,
+          "score": 0.31910667
+        },
+        {
+          "id": 910012,
+          "score": 0.19988518
+        },
+        {
+          "id": 910007,
+          "score": 0.18053659
+        },
+        {
+          "id": 910001,
+          "score": 0.08263038
+        },
+        {
+          "id": 910021,
+          "score": 0.0811532
+        },
+        {
+          "id": 910024,
+          "score": 0.03919054
+        }
+      ],
+      "expected_ids": [
+        910003
+      ],
+      "expected_recalled_at_50": true,
+      "elapsed_seconds": 10.635
+    }
+  ],
+  "all_strategies_recalled_expected_at_50": true,
+  "total_elapsed_seconds": 21.068
+}
