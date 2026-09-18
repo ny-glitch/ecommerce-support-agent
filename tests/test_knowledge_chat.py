@@ -167,6 +167,31 @@ async def test_knowledge_selection_extends_deadline_from_prepare_start_once() ->
     assert events[-1].name == "done"
 
 
+async def test_knowledge_deadline_covers_call_persistence() -> None:
+    configuration = settings(
+        request_timeout_seconds=1,
+        knowledge_request_timeout_seconds=3,
+    )
+    service, gateway, conversations, pipeline, pool = service_case(
+        configuration=configuration
+    )
+    real_append = conversations.append_call
+
+    async def delayed_append(*args):
+        await asyncio.sleep(0.04)
+        await real_append(*args)
+
+    conversations.append_call = delayed_append
+    async with service.prepare("C65-Pro支持什么协议？", None) as prepared:
+        prepared.started_at = asyncio.get_running_loop().time() - 0.98
+        prepared.deadline = prepared.started_at + 1
+        events = [event async for event in service.stream(prepared)]
+
+    assert events[-1].name == "done"
+    assert prepared.deadline == pytest.approx(prepared.started_at + 3)
+    assert len(pipeline.calls) == 1
+
+
 async def test_knowledge_call_uses_original_question_not_model_arguments() -> None:
     service, gateway, conversations, pipeline, pool = service_case()
     gateway.selection = AIMessage(content="", tool_calls=[{

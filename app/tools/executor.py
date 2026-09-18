@@ -271,6 +271,9 @@ class ToolExecutor:
 
             invoke = asyncio.create_task(business_tool.ainvoke(call))
             progress_get: asyncio.Task | None = None
+            terminal_outcome: ToolOutcome | None = None
+            retry = False
+            raw_message: object = None
             attempt_deadline = (
                 deadline
                 if policy.shared_deadline
@@ -308,62 +311,60 @@ class ToolExecutor:
             except asyncio.CancelledError:
                 raise
             except (ValidationError, InvalidToolArguments):
-                yield self._outcome(
+                terminal_outcome = self._outcome(
                     call_id,
                     name,
                     {"status": "error", "code": "INVALID_TOOL_ARGUMENTS"},
                     "failed",
                     attempt,
                 )
-                return
             except TimeoutError:
                 deadline_expired = time.monotonic() >= deadline
                 if deadline_expired:
-                    yield self._outcome(
+                    terminal_outcome = self._outcome(
                         call_id,
                         name,
                         {"status": "error", "code": "TOOL_DEADLINE_EXCEEDED"},
                         "failed",
                         attempt,
                     )
-                    return
-                if attempt == max_attempts:
-                    yield self._outcome(
+                elif attempt == max_attempts:
+                    terminal_outcome = self._outcome(
                         call_id,
                         name,
                         {"status": "error", "code": "TOOL_TIMEOUT"},
                         "failed",
                         attempt,
                     )
-                    return
-                continue
+                else:
+                    retry = True
             except ServiceError as error:
-                yield self._outcome(
+                terminal_outcome = self._outcome(
                     call_id,
                     name,
                     {"status": "error", "code": error.code},
                     "failed",
                     attempt,
                 )
-                return
             except Exception as error:
                 if self._is_transient(error):
                     if time.monotonic() >= deadline:
                         code = "TOOL_DEADLINE_EXCEEDED"
                     elif attempt < max_attempts:
-                        continue
+                        retry = True
+                        code = ""
                     else:
                         code = "TOOL_TEMPORARY_FAILURE"
                 else:
                     code = "TOOL_EXECUTION_FAILED"
-                yield self._outcome(
-                    call_id,
-                    name,
-                    {"status": "error", "code": code},
-                    "failed",
-                    attempt,
-                )
-                return
+                if not retry:
+                    terminal_outcome = self._outcome(
+                        call_id,
+                        name,
+                        {"status": "error", "code": code},
+                        "failed",
+                        attempt,
+                    )
             finally:
                 if progress_get is not None:
                     progress_get.cancel()
@@ -372,6 +373,11 @@ class ToolExecutor:
                     invoke.cancel()
                 await asyncio.gather(invoke, return_exceptions=True)
 
+            if terminal_outcome is not None:
+                yield terminal_outcome
+                return
+            if retry:
+                continue
             yield self._successful_outcome(
                 call_id,
                 name,

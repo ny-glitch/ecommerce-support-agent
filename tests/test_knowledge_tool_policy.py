@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 
+import pytest
+
 from app.db.contracts import TurnRef
 from app.tools.business import ToolContext, build_registry
 from app.tools.executor import RetrievalProgress, ToolExecutor, ToolOutcome
@@ -92,6 +94,35 @@ async def test_knowledge_payload_over_4kb_is_preserved_and_not_retried() -> None
     assert len(expected.encode("utf-8")) > 4096
     assert outcome.message.content == expected
     assert outcome.terminal_status == "succeeded"
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "invalid"),
+    [
+        ("query", "original", 123),
+        ("query", "normalized", []),
+        ("query", "synonyms", 42),
+        ("query", "category", False),
+        ("root", "reason_code", {"bad": "type"}),
+        ("root", "refusal", ["bad type"]),
+    ],
+)
+async def test_knowledge_payload_rejects_non_contract_field_types(
+    section: str, field: str, invalid: object
+) -> None:
+    payload = make_decision(status="not_found").to_payload()
+    target = payload["query"] if section == "query" else payload
+    target[field] = invalid
+
+    async def knowledge_call() -> str:
+        return json.dumps(payload, ensure_ascii=False)
+
+    outcome = (await collect(
+        build_registry(context(), Unused(), Unused(), knowledge_call=knowledge_call)
+    ))[-1]
+    assert isinstance(outcome, ToolOutcome)
+    assert outcome.terminal_status == "failed"
+    assert json.loads(outcome.message.content)["code"] == "INVALID_TOOL_RESULT"
 
 
 async def test_progress_queue_is_forwarded_while_knowledge_invocation_runs() -> None:

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from app.knowledge.contracts import (
     Citation,
@@ -32,6 +32,27 @@ class InvalidToolArguments(Exception):
 
 class TransientToolError(Exception):
     pass
+
+
+class _KnowledgeQueryPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    original: str
+    normalized: str
+    synonyms: list[str]
+    category: str | None
+    fallback: bool
+
+
+class _KnowledgeResultPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["ok", "not_found"]
+    query: _KnowledgeQueryPayload
+    sources: list[Citation]
+    assessment: EvidenceAssessment | None
+    reason_code: str | None
+    refusal: str | None
 
 
 def _serialize(payload: dict[str, Any]) -> str:
@@ -122,33 +143,25 @@ def bounded_result(payload: dict[str, Any]) -> str:
 
 def validated_knowledge_result(payload: dict[str, Any]) -> str:
     """Validate and canonically serialize the sole large-result contract."""
-    if set(payload) != {
-        "status",
-        "query",
-        "sources",
-        "assessment",
-        "reason_code",
-        "refusal",
-    }:
-        raise ValueError("invalid knowledge result keys")
     try:
-        query = QueryPlan(**payload["query"])
-        sources = tuple(Citation.model_validate(item) for item in payload["sources"])
-        assessment = (
-            None
-            if payload["assessment"] is None
-            else EvidenceAssessment.model_validate(payload["assessment"])
+        validated = _KnowledgeResultPayload.model_validate(payload, strict=True)
+        query = QueryPlan(
+            original=validated.query.original,
+            normalized=validated.query.normalized,
+            synonyms=tuple(validated.query.synonyms),
+            category=validated.query.category,
+            fallback=validated.query.fallback,
         )
         decision = KnowledgeDecision(
             query=query,
-            status=payload["status"],
-            sources=sources,
-            assessment=assessment,
-            reason_code=payload["reason_code"],
-            refusal=payload["refusal"],
+            status=validated.status,
+            sources=tuple(validated.sources),
+            assessment=validated.assessment,
+            reason_code=validated.reason_code,
+            refusal=validated.refusal,
         )
         canonical = _serialize(decision.to_payload())
-    except (KeyError, TypeError, ValidationError) as exc:
+    except (TypeError, ValidationError) as exc:
         raise ValueError("invalid knowledge result") from exc
     if len(canonical.encode("utf-8")) > MAX_KNOWLEDGE_RESULT_BYTES:
         raise ValueError("knowledge result too large")

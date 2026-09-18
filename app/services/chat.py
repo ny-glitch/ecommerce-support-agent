@@ -342,6 +342,14 @@ class ChatService:
             calls = decision.tool_calls
             if decision.invalid_tool_calls or len(calls) > 1 or any(not call.get("id") for call in calls):
                 raise ServiceError("INVALID_TOOL_CALL", "工具调用格式无效，请重试", 502)
+            is_knowledge = bool(
+                calls and calls[0].get("name") == "query_faq"
+            )
+            if is_knowledge:
+                prepared.deadline = (
+                    prepared.started_at
+                    + self.settings.knowledge_request_timeout_seconds
+                )
             current_tool_messages = []
             if calls:
                 await _bounded(
@@ -349,13 +357,8 @@ class ChatService:
                     prepared.deadline, prepared._operations,
                     mutations=prepared._mutations,
                 )
-                is_knowledge = calls[0]["name"] == "query_faq"
                 progress_queue = None
                 if is_knowledge:
-                    prepared.deadline = (
-                        prepared.started_at
-                        + self.settings.knowledge_request_timeout_seconds
-                    )
                     progress_queue = asyncio.Queue(maxsize=8)
                     knowledge_state = prepared._knowledge_state
                     # The prepare closure and stream share this dictionary by reference.

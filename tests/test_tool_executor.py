@@ -95,6 +95,47 @@ async def test_timeout_stops_after_configured_attempts() -> None:
     assert json.loads(outcome.message.content)["code"] == "TOOL_TIMEOUT"
 
 
+async def test_timeout_outcome_waits_for_invocation_settlement() -> None:
+    cleanup_allowed = asyncio.Event()
+    invocation_settled = asyncio.Event()
+
+    @tool(args_schema=NoArgs)
+    async def slow_cleanup() -> str:
+        """Expose cancellation cleanup ordering."""
+        try:
+            await asyncio.Event().wait()
+        finally:
+            await cleanup_allowed.wait()
+            invocation_settled.set()
+
+    generator = ToolExecutor(timeout_seconds=0.01, max_attempts=1).run(
+        {
+            "name": "slow_cleanup",
+            "args": {},
+            "id": "settlement-1",
+            "type": "tool_call",
+        },
+        ToolRegistry([slow_cleanup]),
+        deadline=asyncio.get_running_loop().time() + 1,
+    )
+    assert isinstance(await anext(generator), ToolProgress)
+    outcome_read = asyncio.create_task(anext(generator))
+    try:
+        await asyncio.sleep(0.03)
+        assert not outcome_read.done()
+        assert not invocation_settled.is_set()
+
+        cleanup_allowed.set()
+        outcome = await asyncio.wait_for(outcome_read, 0.5)
+        assert invocation_settled.is_set()
+        assert isinstance(outcome, ToolOutcome)
+        assert json.loads(outcome.message.content)["code"] == "TOOL_TIMEOUT"
+    finally:
+        cleanup_allowed.set()
+        await asyncio.gather(outcome_read, return_exceptions=True)
+        await generator.aclose()
+
+
 async def test_validation_error_is_not_retried() -> None:
     calls = 0
 
