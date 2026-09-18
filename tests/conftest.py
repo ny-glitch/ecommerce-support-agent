@@ -14,6 +14,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=False,
         help="fail instead of skipping when the isolated MySQL test database is absent",
     )
+    parser.addoption(
+        "--require-local-models",
+        action="store_true",
+        default=False,
+        help="fail instead of skipping when the fixed local knowledge models are absent",
+    )
 
 
 @pytest.fixture(autouse=True)

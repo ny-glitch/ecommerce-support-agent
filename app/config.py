@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from pydantic import (
@@ -13,6 +14,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PositiveInt = Annotated[int, Field(gt=0)]
 ToolAttempts = Literal[1, 2]
+EmbeddingModel = Literal["BAAI/bge-m3"]
+EmbeddingRevision = Literal["5617a9f61b028005a4858fdac845db406aefb181"]
+RerankerModel = Literal["BAAI/bge-reranker-v2-m3"]
+RerankerRevision = Literal["953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e"]
 _HTTP_URL_ADAPTER = TypeAdapter(HttpUrl)
 _PROTECTED_CHAT_BODY_KEYS = frozenset(
     {
@@ -55,10 +60,32 @@ class Settings(BaseSettings):
     request_timeout_seconds: PositiveInt = 60
     tool_timeout_seconds: PositiveInt = 5
     tool_max_attempts: ToolAttempts = 2
+    milvus_uri: str = "http://127.0.0.1:19530"
+    milvus_collection: str = "knowledge"
+    milvus_token: SecretStr | None = None
+    knowledge_models_dir: Path = Path(".cache/ch04/models")
+    knowledge_calibration_path: Path = Path(".cache/ch04/calibration.json")
+    knowledge_request_timeout_seconds: PositiveInt = 240
+    knowledge_batch_size: PositiveInt = 4
+    knowledge_worker_queue_size: PositiveInt = 4
+    knowledge_embedding_model: EmbeddingModel = "BAAI/bge-m3"
+    knowledge_embedding_revision: EmbeddingRevision = (
+        "5617a9f61b028005a4858fdac845db406aefb181"
+    )
+    knowledge_reranker_model: RerankerModel = "BAAI/bge-reranker-v2-m3"
+    knowledge_reranker_revision: RerankerRevision = (
+        "953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e"
+    )
 
     @field_validator("llm_base_url")
     @classmethod
     def validate_llm_base_url(cls, value: str) -> str:
+        _HTTP_URL_ADAPTER.validate_python(value)
+        return value
+
+    @field_validator("milvus_uri")
+    @classmethod
+    def validate_milvus_uri(cls, value: str) -> str:
         _HTTP_URL_ADAPTER.validate_python(value)
         return value
 
