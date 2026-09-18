@@ -390,7 +390,7 @@ ranked.sort(key=lambda item: (-item.score, item.chunk.id))
 
 `KnowledgeGateway.assess(question:str,sources:tuple[Citation,...],*,normalized_question:str)->EvidenceAssessment`；`EvidenceBudget(settings,history:list[StoredTurn],question:str,call:AIMessage).select(ranked:tuple[RankedChunk,...],query:QueryPlan)->EvidencePlan`；`KnowledgePipeline(normalizer,retriever,gateway,threshold:float).run(question:str,category:str|None,budget:EvidenceBudget,*,deadline:float,emit:Callable[[str],Awaitable[None]])->KnowledgeDecision`。该流程默认 hybrid_rerank；评估通过同模块 `decide_evidence(query,retrieval,budget,*,gateway:KnowledgeGateway,threshold:float|None,deadline)->KnowledgeDecision` 复用预算/自评，前三策略 threshold=None。
 
-- [ ] **Step 1：写首尾布局、真实证据预算和拒答 RED。** 测试 sources 编号稳定、1与2位于首尾、预算只减整块、唯一一次 assess 实际收到裁剪后的集合；零命中/全 stale/低分提前拒答不调用 assess；无效支持 ID 受控错误，不能默认放行。测试 input 很长导致连一条都放不下时返回 context_budget。
+- [x] **Step 1：写首尾布局、真实证据预算和拒答 RED。** 测试 sources 编号稳定、1与2位于首尾、预算只减整块、唯一一次 assess 实际收到裁剪后的集合；零命中/全 stale/低分提前拒答不调用 assess；无效支持 ID 受控错误，不能默认放行。测试 input 很长导致连一条都放不下时返回 context_budget。
 
 ```python
 from app.knowledge.evidence import edge_order, validate_citation_numbers
@@ -408,7 +408,7 @@ def test_unknown_citation_is_generation_error():
 
 Run: `.venv/bin/python -m pytest tests/test_knowledge_evidence.py tests/test_knowledge_pipeline.py -q`。
 
-- [ ] **Step 2：实现预算与一次自评。** 生成 sources 时先按相关性编号，再做 edge_order。EvidenceBudget 构造真实最终 system/user/assistant-tool/ToolMessage，预留受限 assessment 等字段最多4096 UTF-8字节；使用已有 build_tool_context 估算并先裁剪旧完整轮次，不够才去掉排名末尾整块。工具结果JSON和模型输入分别校验，不把48000字节当成token预算。 模型输入同时检查实际自评请求（含system/schema、原话、标准问法、所选原文）和最终生成请求；两者都能容纳才调用自评，否则继续删最低排名整块，无法容纳则context_budget。
+- [x] **Step 2：实现预算与一次自评。** 生成 sources 时先按相关性编号，再做 edge_order。EvidenceBudget 构造真实最终 system/user/assistant-tool/ToolMessage，预留受限 assessment 等字段最多4096 UTF-8字节；使用已有 build_tool_context 估算并先裁剪旧完整轮次，不够才去掉排名末尾整块。工具结果JSON和模型输入分别校验，不把48000字节当成token预算。 模型输入同时检查实际自评请求（含system/schema、原话、标准问法、所选原文）和最终生成请求；两者都能容纳才调用自评，否则继续删最低排名整块，无法容纳则context_budget。
 
 ```python
 def edge_order(items):
@@ -417,22 +417,24 @@ def edge_order(items):
 
 候选选择结束后才调用一次 assess。评估和在线同用 PromptTemplate：充分必须引用已提供的 ID，不把历史助手回答或常识当本店证据；指定型号、否定条件、证据冲突、保证到账等样例进入校准评估。结构化响应复核与normalize一致，但 assess失败返回技术错误，不能降级为猜测答案。
 
-- [ ] **Step 3：实现固定 pipeline 与拒答消息。** emit阶段为 normalizing/retrieving/reranking/checking_evidence，仅传阶段标记。QueryNormalizer一次、Retriever一次、自评最多一次，不循环。零结果区分 raw_count=0 和全stale；最高rerank分低于阈值reason=low_relevance；其余由assess。受控拒答文本不包含内部堆栈、不承诺建单，所有原话由Task7入池，pipeline本身无DB副作用。
+- [x] **Step 3：实现固定 pipeline 与拒答消息。** emit阶段为 normalizing/retrieving/reranking/checking_evidence，仅传阶段标记。QueryNormalizer一次、Retriever一次、自评最多一次，不循环。零结果区分 raw_count=0 和全stale；最高rerank分低于阈值reason=low_relevance；其余由assess。受控拒答文本不包含内部堆栈、不承诺建单，所有原话由Task7入池，pipeline本身无DB副作用。
 
 ```python
 REFUSALS = {
     'no_hits': '现有知识不足以确认这个问题，请补充具体商品或政策信息，也可以联系人工客服。',
-    'low_relevance': '现有知识与这个问题的相关性不足，无法据此给出确定答案，请补充具体信息。',
+    'low_relevance': '现有知识不足以确认这个问题，相关证据不足，请补充具体信息。',
     'insufficient_evidence': '现有知识不足以确认您询问的事项，建议补充信息或联系人工客服核实。',
-    'ambiguous_question': '现有信息无法确定您指的是哪件商品或哪项政策，请补充具体型号和问题。',
-    'stale_evidence': '相关知识正在同步，暂时无法据此确认答案，请稍后重试。',
-    'context_budget': '这个问题所需的知识暂时无法完整放入本轮上下文，请缩小问题范围。',
+    'ambiguous_question': '现有知识不足以确认您指的是哪件商品或哪项政策，请补充具体型号和问题。',
+    'stale_evidence': '现有知识不足以确认答案，相关内容正在同步，请稍后重试。',
+    'context_budget': '现有知识不足以确认答案，本轮暂时无法完整放入所需证据，请缩小问题范围。',
 }
 ```
 
 validate_citation_numbers 支持 `[1][2]` 形式，只允许本轮1..n；拒绝无有效引用与未知编号。它只验证映射，不声称验证语义。技术错误用 ServiceError 的 KNOWLEDGE_UNAVAILABLE/EVIDENCE_ASSESSMENT_ERROR 等确定错误码。
 
 - [ ] **Step 4：GREEN、Prompt 评估与提交。** 除单测外，用校准样例检验无证据、近似型号、越权资料指令、到账承诺、跨块证据、不够上下文等结果；记录可回答/应拒答标签及真实自评输出。评审后提交 `feat: gate grounded answers with evidence budgets and refusal decisions`。
+
+执行状态：Task6代码/本地门槛已独立评审通过（0590a1b + fc9ded9）；20项聚焦、358项完整本地依赖测试及裁剪变异检查通过。Step4真实DeepSeek Prompt评估待外发授权，Task6整体不标完成。
 
 ## Task 7：知识流程进入既有聊天和工具审计
 
