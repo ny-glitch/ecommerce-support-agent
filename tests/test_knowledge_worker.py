@@ -75,6 +75,45 @@ async def test_cancelled_running_job_keeps_slot_until_finished() -> None:
         await worker.aclose()
 
 
+async def test_cancelled_queued_job_keeps_churn_within_queue_bound() -> None:
+    worker = InferenceWorker(queue_size=1)
+    entered = threading.Event()
+    release = threading.Event()
+    queued_job_ran = threading.Event()
+
+    def blocked() -> None:
+        entered.set()
+        release.wait(2)
+
+    running = asyncio.create_task(worker.run(blocked, deadline=time.monotonic() + 5))
+    try:
+        assert await asyncio.to_thread(entered.wait, 1)
+        admitted = 0
+        rejected = 0
+        for _ in range(8):
+            candidate = asyncio.create_task(
+                worker.run(queued_job_ran.set, deadline=time.monotonic() + 5)
+            )
+            await asyncio.sleep(0)
+            if candidate.done():
+                with pytest.raises(InferenceQueueFullError):
+                    await candidate
+                rejected += 1
+            else:
+                admitted += 1
+                candidate.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await candidate
+
+        assert admitted == 1
+        assert rejected == 7
+        assert not queued_job_ran.is_set()
+    finally:
+        release.set()
+        await running
+        await worker.aclose()
+
+
 async def test_full_queue_rejects_new_job_without_running_it() -> None:
     worker = InferenceWorker(queue_size=1)
     entered = threading.Event()
@@ -147,3 +186,33 @@ async def test_close_waits_for_real_thread_and_rejects_new_jobs() -> None:
 
     with pytest.raises(InferenceWorkerClosedError):
         await worker.run(lambda: None, deadline=time.monotonic() + 1)
+
+
+async def test_cancelled_first_close_does_not_let_second_close_return_early() -> None:
+    worker = InferenceWorker(queue_size=1)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocked() -> None:
+        entered.set()
+        release.wait(2)
+
+    running = asyncio.create_task(worker.run(blocked, deadline=time.monotonic() + 5))
+    second_close: asyncio.Task[None] | None = None
+    try:
+        assert await asyncio.to_thread(entered.wait, 1)
+        first_close = asyncio.create_task(worker.aclose())
+        await asyncio.sleep(0.02)
+        first_close.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first_close
+
+        second_close = asyncio.create_task(worker.aclose())
+        await asyncio.sleep(0.02)
+        assert not second_close.done()
+    finally:
+        release.set()
+        await running
+        if second_close is not None:
+            await second_close
+        await worker.aclose()
