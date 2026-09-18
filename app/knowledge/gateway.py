@@ -5,12 +5,16 @@ from pathlib import Path
 from typing import Any, Annotated
 
 import openai
+from langchain_core.messages import BaseMessage
 from langchain_core.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
 from app.config import Settings
 from app.context import build_context
+from app.errors import ServiceError
+from app.knowledge.contracts import Citation, EvidenceAssessment
+from app.prompts import evidence_assessment_system_prompt
 
 
 _PROMPT_PATH = Path(__file__).parents[1] / "prompts" / "query_normalization.txt"
@@ -60,6 +64,19 @@ class KnowledgeGateway:
             include_raw=True,
             extra_body=dict(chat_extra_body),
         )
+        assessment_prompt = evidence_assessment_system_prompt(
+            json.dumps(
+                EvidenceAssessment.model_json_schema(),
+                ensure_ascii=False,
+            )
+        )
+        self._assessment_prompt = assessment_prompt
+        self._assessor = model.with_structured_output(
+            EvidenceAssessment,
+            method="json_mode",
+            include_raw=True,
+            extra_body=dict(chat_extra_body),
+        )
         self._settings = settings
 
     async def normalize(self, question: str) -> NormalizationOutput:
@@ -104,3 +121,87 @@ class KnowledgeGateway:
             raise NormalizationResponseError(
                 "invalid structured normalization response"
             ) from exc
+
+    async def assess(
+        self,
+        question: str,
+        sources: tuple[Citation, ...],
+        *,
+        normalized_question: str,
+    ) -> EvidenceAssessment:
+        messages = build_assessment_messages(
+            question,
+            sources,
+            normalized_question=normalized_question,
+            settings=self._settings,
+            system_prompt=self._assessment_prompt,
+        )
+        try:
+            result = await self._assessor.ainvoke(messages)
+        except (
+            openai.ContentFilterFinishReasonError,
+            openai.LengthFinishReasonError,
+        ) as exc:
+            raise ServiceError(
+                "EVIDENCE_ASSESSMENT_ERROR",
+                "证据充分性校验失败，请重试",
+                502,
+            ) from exc
+        except Exception as exc:
+            if isinstance(exc, ServiceError):
+                raise
+            raise ServiceError(
+                "KNOWLEDGE_UNAVAILABLE",
+                "知识服务暂时不可用，请稍后重试",
+                502,
+            ) from exc
+
+        try:
+            raw = result["raw"]
+            content = raw.content
+            finish_reason = raw.response_metadata.get("finish_reason")
+            parsed = result["parsed"]
+            if (
+                finish_reason != "stop"
+                or not isinstance(content, str)
+                or not content.strip()
+                or result["parsing_error"] is not None
+                or not isinstance(parsed, EvidenceAssessment)
+            ):
+                raise ValueError("incomplete or unparseable evidence assessment")
+            decoded = json.loads(content)
+            if not isinstance(decoded, dict):
+                raise ValueError("evidence assessment must be a JSON object")
+            validated = EvidenceAssessment.model_validate(decoded)
+            if validated != parsed:
+                raise ValueError("parsed assessment does not match raw JSON")
+            return validated
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError, ValidationError) as exc:
+            raise ServiceError(
+                "EVIDENCE_ASSESSMENT_ERROR",
+                "证据充分性校验失败，请重试",
+                502,
+            ) from exc
+
+
+def build_assessment_messages(
+    question: str,
+    sources: tuple[Citation, ...],
+    *,
+    normalized_question: str,
+    settings: Settings,
+    system_prompt: str | None = None,
+) -> list[BaseMessage]:
+    prompt = system_prompt or evidence_assessment_system_prompt(
+        json.dumps(EvidenceAssessment.model_json_schema(), ensure_ascii=False)
+    )
+    payload = json.dumps(
+        {
+            "original_question": question,
+            "normalized_question": normalized_question,
+            "sources": [source.model_dump(mode="json") for source in sources],
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return build_context(prompt, [], payload, settings).messages

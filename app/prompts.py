@@ -31,3 +31,15 @@ def extraction_system_prompt() -> str:
         AfterSalesResult.model_json_schema(), ensure_ascii=False
     )
     return template.format(schema_json=schema_json)
+
+
+def knowledge_answer_system_prompt() -> str:
+    template = PromptTemplate.from_template(_load_template("knowledge_answer.txt"))
+    return template.format()
+
+
+def evidence_assessment_system_prompt(schema_json: str) -> str:
+    template = PromptTemplate.from_template(
+        _load_template("evidence_assessment.txt")
+    )
+    return template.format(schema_json=schema_json)

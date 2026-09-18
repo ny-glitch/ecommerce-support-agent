@@ -77,6 +77,23 @@ def estimate_tokens(messages: Sequence[BaseMessage]) -> int:
     )
 
 
+def validate_context_budget(
+    messages: Sequence[BaseMessage],
+    settings: Settings,
+    *,
+    tool_schemas: Sequence[dict] = (),
+) -> int:
+    estimated_input_tokens = estimate_tokens(messages) + _json_bytes(tool_schemas)
+    reserved_tokens = settings.max_output_tokens + settings.token_safety_margin
+    if estimated_input_tokens + reserved_tokens > settings.context_window_tokens:
+        raise ServiceError(
+            code="INPUT_TOO_LONG",
+            message="输入内容超过可处理的上下文长度",
+            status_code=413,
+        )
+    return estimated_input_tokens
+
+
 def _messages_for(
     system_prompt: str, turns: Sequence[Turn], message: str
 ) -> list[BaseMessage]:
@@ -94,18 +111,12 @@ def build_context(
     settings: Settings,
 ) -> ContextWindow:
     required_messages = _messages_for(system_prompt, [], message)
-    required_tokens = estimate_tokens(required_messages)
-    reserved_tokens = settings.max_output_tokens + settings.token_safety_margin
-    if required_tokens + reserved_tokens > settings.context_window_tokens:
-        raise ServiceError(
-            code="INPUT_TOO_LONG",
-            message="输入内容超过可处理的上下文长度",
-            status_code=413,
-        )
+    validate_context_budget(required_messages, settings)
 
     retained_turns = list(turns[-settings.max_history_turns :])
     messages = _messages_for(system_prompt, retained_turns, message)
     estimated_input_tokens = estimate_tokens(messages)
+    reserved_tokens = settings.max_output_tokens + settings.token_safety_margin
 
     while (
         retained_turns
@@ -147,18 +158,12 @@ def build_tool_context(
     tool_schemas: list[dict],
     current_tool_messages: Sequence[BaseMessage] = (),
 ) -> ToolContextWindow:
-    schema_bytes = _json_bytes(tool_schemas)
     required_messages = _tool_messages_for(
         system_prompt, [], message, current_tool_messages
     )
-    required_tokens = estimate_tokens(required_messages) + schema_bytes
+    schema_bytes = _json_bytes(tool_schemas)
     reserved_tokens = settings.max_output_tokens + settings.token_safety_margin
-    if required_tokens + reserved_tokens > settings.context_window_tokens:
-        raise ServiceError(
-            code="INPUT_TOO_LONG",
-            message="输入内容超过可处理的上下文长度",
-            status_code=413,
-        )
+    validate_context_budget(required_messages, settings, tool_schemas=tool_schemas)
 
     retained_turns = list(turns[-settings.max_history_turns :])
     messages = _tool_messages_for(
