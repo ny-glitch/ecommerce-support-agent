@@ -20,6 +20,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=False,
         help="fail instead of skipping when the fixed local knowledge models are absent",
     )
+    parser.addoption(
+        "--require-milvus",
+        action="store_true",
+        default=False,
+        help="fail instead of skipping when the isolated Milvus service is absent",
+    )
 
 
 @pytest.fixture(autouse=True)

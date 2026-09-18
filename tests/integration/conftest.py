@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from uuid import uuid4
 
@@ -111,3 +112,48 @@ async def new_turn(repos) -> TurnRef:
     ref = TurnRef(conversation_id=str(uuid4()), turn_id=str(uuid4()))
     await conversations.create(ref.conversation_id, "demo")
     return ref
+
+
+@pytest_asyncio.fixture
+async def milvus_store(request: pytest.FixtureRequest):
+    from pymilvus import MilvusClient
+
+    from app.config import Settings
+    from app.knowledge.milvus_store import MilvusStore, validate_test_collection
+
+    collection_name = f"ch04_test_{uuid4().hex}"
+    settings = Settings(
+        llm_base_url="https://api.example.com/v1",
+        llm_model="test-model",
+        llm_api_key="test-key",
+    )
+    store = MilvusStore(settings, collection_name=collection_name)
+    available = False
+    try:
+        try:
+            await store.check()
+            await store.ensure_schema()
+            available = True
+        except Exception as exc:
+            if request.config.getoption("--require-milvus"):
+                pytest.fail(f"--require-milvus requires Milvus 2.6.23: {exc}")
+            pytest.skip(f"Milvus 2.6.23 is not available: {exc}")
+        yield store, settings, collection_name
+    finally:
+        await store.aclose()
+        if available:
+            validate_test_collection(collection_name)
+
+            def cleanup() -> None:
+                client = MilvusClient(uri=settings.milvus_uri)
+                try:
+                    if client.has_collection(collection_name):
+                        client.drop_collection(collection_name)
+                finally:
+                    client.close()
+
+            try:
+                await asyncio.to_thread(cleanup)
+            except Exception:
+                if request.config.getoption("--require-milvus"):
+                    raise
