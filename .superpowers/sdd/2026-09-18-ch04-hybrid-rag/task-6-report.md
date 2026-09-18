@@ -209,3 +209,65 @@ The required set includes no evidence, exact and nearby models, negation,
 embedded instructions, conditional arrival timing, full and missing
 cross-chunk evidence, unresolved referent, and no-fit context. Task 9 remains
 responsible for the full four-strategy metrics.
+
+## Fix round 1: authoritative tool name and cropped-assessment regression
+
+Base commit: `0590a1b2d93f07c066c5be262706668bdea99b6a`.
+
+The controller-verified review had exactly two Important findings:
+
+1. The final answer prompt named `query_knowledge`, but the binding tool and
+   existing registry use `query_faq`.
+2. The purported cropped-assessment regression supplied one already-fitting
+   source, so it did not prove that assessment receives the post-budget set.
+
+The prompt now names `query_faq`, and both evidence/pipeline call fixtures use
+that authoritative name. This is a direct contract correction; no brittle
+source-text assertion was added and no prompt-quality claim is inferred.
+
+The assessment regression now supplies three ranked chunks with 650-character
+answers under a 12,000-token configured context. The real `EvidenceBudget`
+removes the relevance tail and retains chunk IDs `910001` and `910002`.
+Assertions verify that the decision and the single gateway assessment receive
+exactly those two IDs and that dropped ID `910003` is absent.
+
+Because production pruning was already correct and the defect was missing
+coverage, the new regression initially passed against the base implementation:
+
+```text
+$ .venv/bin/python -m pytest \
+  tests/test_knowledge_pipeline.py::test_assessment_runs_once_on_the_actual_cropped_sources -q
+. [100%]
+1 passed in 0.69s
+```
+
+Mutation evidence then temporarily changed `EvidenceBudget._fits` to always
+return true, disabling pruning. The regression failed on the exact behavioral
+boundary:
+
+```text
+$ .venv/bin/python -m pytest \
+  tests/test_knowledge_pipeline.py::test_assessment_runs_once_on_the_actual_cropped_sources -q
+F [100%]
+E assert (910001, 910003, 910002) == (910001, 910002)
+1 failed in 0.57s
+```
+
+The mutation was fully reverted before covering verification. Final focused
+command:
+
+```text
+$ .venv/bin/python -m pytest tests/test_knowledge_evidence.py \
+  tests/test_knowledge_pipeline.py -q
+.................... [100%]
+20 passed in 0.85s
+```
+
+Self-review confirmed the fixture uses real budget selection rather than a
+stubbed/cropped source list, the input has strictly more IDs than the retained
+set, the edge-ordered retained IDs are asserted exactly, the dropped ID cannot
+reach assessment, and assessment call count remains one. The deferred minor
+empty-schema accounting concern in `app/context.py` was not changed. Per the
+fix brief, the unchanged full integration suite was not repeated. Root-owned
+frontend/dev-note/plan changes remain untouched. No external LLM call was
+made, and the real prompt-quality gate remains pending explicit authorization.

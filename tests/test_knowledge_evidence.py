@@ -53,7 +53,7 @@ def call() -> AIMessage:
         tool_calls=[
             {
                 "id": "call-knowledge",
-                "name": "query_knowledge",
+                "name": "query_faq",
                 "args": {"question": "C65-Pro 支持什么协议？"},
                 "type": "tool_call",
             }

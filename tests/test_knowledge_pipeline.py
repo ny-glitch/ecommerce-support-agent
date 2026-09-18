@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 import time
 
 import pytest
@@ -66,7 +67,7 @@ def call() -> AIMessage:
         tool_calls=[
             {
                 "id": "call-knowledge",
-                "name": "query_knowledge",
+                "name": "query_faq",
                 "args": {"question": plan().original},
                 "type": "tool_call",
             }
@@ -154,27 +155,62 @@ async def test_budget_failure_refuses_without_assessment() -> None:
 
 
 async def test_assessment_runs_once_on_the_actual_cropped_sources() -> None:
+    candidates = tuple(
+        RankedChunk(
+            replace(
+                make_chunk(vectorize_status="done"),
+                id=910_000 + number,
+                questions=f"问题 {number}",
+                answer=f"答案 {number} " + "甲" * 650,
+            ),
+            1.0 - number / 10,
+        )
+        for number in range(1, 4)
+    )
+    result = RetrievalResult(
+        query=plan(),
+        strategy="hybrid_rerank",
+        ranked=candidates,
+        raw_count=3,
+        stale_count=0,
+    )
+    constrained = settings().model_copy(
+        update={
+            "context_window_tokens": 12_000,
+            "max_output_tokens": 300,
+            "token_safety_margin": 200,
+        }
+    )
     gateway = Gateway(
         EvidenceAssessment(
             sufficient=True,
             reason_code="supported",
             reason="原文直接支持",
-            supporting_chunk_ids=[910001],
+            supporting_chunk_ids=[910001, 910002],
         )
     )
 
     decision = await decide_evidence(
         plan(),
-        retrieval(),
-        budget(),
+        result,
+        EvidenceBudget(constrained, [], plan().original, call()),
         gateway=gateway,  # type: ignore[arg-type]
         threshold=0.5,
         deadline=time.monotonic() + 1,
     )
 
     assert decision.status == "ok"
-    assert [source.chunk_id for source in decision.sources] == [910001]
-    assert gateway.calls == [(plan().original, (910001,), plan().normalized)]
+    retained_ids = (910001, 910002)
+    dropped_ids = {910003}
+    assert len(candidates) > len(retained_ids)
+    assert tuple(source.chunk_id for source in decision.sources) == retained_ids
+    assert len(gateway.calls) == 1
+    assert gateway.calls[0] == (
+        plan().original,
+        retained_ids,
+        plan().normalized,
+    )
+    assert set(gateway.calls[0][1]).isdisjoint(dropped_ids)
 
 
 async def test_unknown_supporting_chunk_id_is_a_controlled_technical_error() -> None:
