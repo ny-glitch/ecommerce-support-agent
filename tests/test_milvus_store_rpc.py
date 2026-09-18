@@ -329,3 +329,91 @@ async def test_close_does_not_block_loop_and_closes_client_created_inflight(
 
     assert len(instances) == 1
     assert instances[0].close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_cold_connection_uses_budget_and_never_invokes_after_deadline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    constructor_entered = threading.Event()
+    release_constructor = threading.Event()
+    method_invoked = threading.Event()
+    connection_timeouts: list[float | None] = []
+
+    class Client:
+        def __init__(
+            self,
+            *,
+            timeout: float | None = None,
+            **_kwargs: Any,
+        ) -> None:
+            connection_timeouts.append(timeout)
+            constructor_entered.set()
+            release_constructor.wait(2)
+
+        def execute(self, *, timeout: float) -> None:
+            method_invoked.set()
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(milvus_module, "MilvusClient", Client)
+    store = MilvusStore(_settings(tmp_path))
+    rpc = asyncio.create_task(
+        store._call("execute", deadline=time.monotonic() + 0.06)
+    )
+    try:
+        assert await asyncio.to_thread(constructor_entered.wait, 1)
+        await asyncio.sleep(0.08)
+        release_constructor.set()
+        with pytest.raises(MilvusDeadlineExceeded):
+            await rpc
+    finally:
+        release_constructor.set()
+        if not rpc.done():
+            with pytest.raises(MilvusDeadlineExceeded):
+                await rpc
+        await store.aclose()
+
+    assert len(connection_timeouts) == 1
+    assert connection_timeouts[0] is not None
+    assert 0 < connection_timeouts[0] <= 0.06
+    assert not method_invoked.is_set()
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_timeout_drain_propagates_after_completion(
+    tmp_path: Path,
+) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+
+    class Client:
+        def execute(self, *, timeout: float) -> None:
+            entered.set()
+            release.wait(2)
+            finished.set()
+
+        def close(self) -> None:
+            return None
+
+    store = MilvusStore(_settings(tmp_path))
+    store._client = Client()  # type: ignore[assignment]
+    rpc = asyncio.create_task(
+        store._call("execute", deadline=time.monotonic() + 0.05)
+    )
+    try:
+        assert await asyncio.to_thread(entered.wait, 1)
+        await asyncio.sleep(0.08)
+        rpc.cancel()
+        await asyncio.sleep(0.02)
+        assert not rpc.done()
+    finally:
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await rpc
+        assert rpc.cancelled()
+        assert finished.is_set()
+        await store.aclose()

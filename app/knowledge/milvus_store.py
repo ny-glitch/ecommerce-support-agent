@@ -311,7 +311,9 @@ class MilvusStore:
                 if isinstance(underlying, TimeoutError):
                     raise underlying
             abandoned.set()
-            await _drain_future(wrapped)
+            cancelled_during_drain = await _drain_future(wrapped)
+            if cancelled_during_drain:
+                raise asyncio.CancelledError
             raise MilvusDeadlineExceeded("Milvus deadline exceeded") from exc
 
     def _invoke(
@@ -332,7 +334,13 @@ class MilvusStore:
             client_kwargs: dict[str, Any] = {"uri": self._settings.milvus_uri}
             if token is not None and token.get_secret_value():
                 client_kwargs["token"] = token.get_secret_value()
+            client_kwargs["timeout"] = remaining
             self._client = MilvusClient(**client_kwargs)
+        if abandoned.is_set():
+            return _ABANDONED
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise MilvusDeadlineExceeded("Milvus deadline exceeded")
         call_kwargs = dict(kwargs)
         call_kwargs["timeout"] = remaining
         return getattr(self._client, method_name)(*args, **call_kwargs)
@@ -351,19 +359,22 @@ class MilvusStore:
         return time.monotonic() + self._settings.knowledge_request_timeout_seconds
 
 
-async def _drain_future(future: asyncio.Future[Any]) -> None:
+async def _drain_future(future: asyncio.Future[Any]) -> bool:
+    cancelled = False
     while not future.done():
         try:
             await asyncio.shield(future)
         except asyncio.CancelledError:
+            cancelled = True
             continue
         except BaseException:
-            return
+            return cancelled
     if not future.cancelled():
         try:
             future.exception()
         except BaseException:
             pass
+    return cancelled
 
 
 def _build_schema():
