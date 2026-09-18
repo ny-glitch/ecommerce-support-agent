@@ -168,12 +168,13 @@ async def test_low_confidence_requires_matching_user_turn_and_original_text(
     real_ref = TurnRef(conversation_id, "turn-real")
     conversations = ConversationRepository(mysql_db.sessions)
     await conversations.create(conversation_id, "demo")
-    await conversations.start_turn(real_ref, "demo", "用户原话")
+    await conversations.start_turn(real_ref, "demo", "Model ABC")
     repo = LowConfidenceRepository(mysql_db.sessions)
 
     for ref, question in (
+        (real_ref, "model abc"),
         (real_ref, "改写后的问题"),
-        (TurnRef(conversation_id, "turn-missing"), "用户原话"),
+        (TurnRef(conversation_id, "turn-missing"), "Model ABC"),
     ):
         with pytest.raises(ServiceError) as exc_info:
             await repo.record_once(

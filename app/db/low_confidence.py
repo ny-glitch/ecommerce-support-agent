@@ -23,17 +23,16 @@ def _database_error() -> ServiceError:
 
 
 async def _validate_turn(session: AsyncSession, ref: TurnRef, question: str) -> None:
-    message_id = (
+    original_questions = (
         await session.execute(
-            select(Message.id).where(
+            select(Message.content).where(
                 Message.conversation_id == ref.conversation_id,
                 Message.turn_id == ref.turn_id,
                 Message.role == "user",
-                Message.content == question,
             )
         )
-    ).scalar_one_or_none()
-    if message_id is None:
+    ).scalars().all()
+    if question not in original_questions:
         raise _turn_mismatch()
 
 
