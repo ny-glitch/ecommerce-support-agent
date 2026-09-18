@@ -190,7 +190,7 @@ Run: `.venv/bin/python -m pytest tests/test_knowledge_corpus.py -q`。实现解�
 
 新增设置：`milvus_uri='http://127.0.0.1:19530'`、`milvus_collection='knowledge'`、`milvus_token:SecretStr|None=None`、`knowledge_models_dir='.cache/ch04/models'`、`knowledge_calibration_path='.cache/ch04/calibration.json'`、`knowledge_request_timeout_seconds=240`、`knowledge_batch_size=4`、`knowledge_worker_queue_size=4`，型号和 revision 使用上述固定值。将 `.cache/` 加入 gitignore；配置错误不得回显 secret。
 
-- [ ] **Step 1：安装、导入检查与 CPU 基线准备。** 用已解析的版本安装，保留现有锁约束；必要的源构建使用正常包构建流程，不禁 TLS、不跳依赖安装。certifi 路径只作为本次 PIP_CERT，不修改系统 CA。
+- [x] **Step 1：安装、导入检查与 CPU 基线准备。** 用已解析的版本安装，保留现有锁约束；必要的源构建使用正常包构建流程，不禁 TLS、不跳依赖安装。certifi 路径只作为本次 PIP_CERT，不修改系统 CA。
 
 ```bash
 PIP_CERT="$PWD/.venv/lib/python3.13/site-packages/certifi/cacert.pem" .venv/bin/python -m pip install -c requirements.lock 'FlagEmbedding==1.4.2' 'pymilvus==2.6.17' 'torch==2.14.0' 'transformers==4.57.6' 'sentence-transformers==5.1.2' 'peft==0.18.1'
@@ -200,7 +200,7 @@ PIP_CERT="$PWD/.venv/lib/python3.13/site-packages/certifi/cacert.pem" .venv/bin/
 
 导入不通过先按 systematic-debugging 找到具体依赖，不把 dry-run 当通过。新增上述顶层固定依赖，刷新完整 lock 时排除本项目 editable 路径；保留原业务依赖版本。
 
-- [ ] **Step 2：写 worker 取消与输入长度 RED。** 用 threading.Event 在测试内构造受控阻塞函数，观察取消后第二个函数在第一函数实际结束前不能运行；finally 必须释放测试 Event，避免悬挂。长度测试注入可计数 tokenizer/model 替身，超出上限时模型调用数为0，不默默 truncation。
+- [x] **Step 2：写 worker 取消与输入长度 RED。** 用 threading.Event 在测试内构造受控阻塞函数，观察取消后第二个函数在第一函数实际结束前不能运行；finally 必须释放测试 Event，避免悬挂。长度测试注入可计数 tokenizer/model 替身，超出上限时模型调用数为0，不默默 truncation。
 
 ```python
 import asyncio
@@ -233,7 +233,7 @@ async def test_cancelled_running_job_keeps_slot_until_finished():
 
 Run: `.venv/bin/python -m pytest tests/test_knowledge_worker.py tests/test_local_knowledge_models.py -q`。
 
-- [ ] **Step 3：实现 adapter 和显式下载。** `prepare_knowledge_models.py` 使用官方 snapshot_download，固定 revision/local_dir，只下载模型、tokenizer、config、M3 所需的 linear.pt 等文件，排除 onnx/及其他导出副本。不要在 HTTP 请求中下载。加载本地路径，CPU/use_fp16=False；embed 指定 return_dense=True、return_sparse=False、return_colbert_vecs=False；score 使用 normalize=True。验证 1024 维、有限数值、输入/输出条数一致。逐批执行，批次之间检查截止时间/取消，评分完整文本，超长输入显式报错。
+- [x] **Step 3：实现 adapter 和显式下载。** `prepare_knowledge_models.py` 使用官方 snapshot_download，固定 revision/local_dir，只下载模型、tokenizer、config、M3 所需的 linear.pt 等文件，排除 onnx/及其他导出副本。不要在 HTTP 请求中下载。加载本地路径，CPU/use_fp16=False；embed 指定 return_dense=True、return_sparse=False、return_colbert_vecs=False；score 使用 normalize=True。验证 1024 维、有限数值、输入/输出条数一致。逐批执行，批次之间检查截止时间/取消，评分完整文本，超长输入显式报错。
 
 ```python
 vectors = embedder.encode(texts, batch_size=4, max_length=8192,
@@ -244,7 +244,7 @@ scores = reranker.compute_score([[query, text] for text in texts],
 
 max_length 与 query/passage 联合长度以已下载 tokenizer 和模型限制核对，不能让示例参数触发隐式截断。将单条 compute_score 的 scalar 归一为一元素列表。Worker 的执行容量在实际线程 Future 的 done 回调里释放，不在等待方取消时释放。
 
-- [ ] **Step 4：GREEN、真实模型与提交。** 新增 --require-local-models，缺模型时普通测试可跳过，要求真实模型时必须失败。下载、预热并跑两条 dense、一对相关/不相关评分及50候选计时，记录模型 revision、维度、耗时、峰值内存；不保证未测的低延迟。评审后即时记日志并提交 `feat: add bounded local embedding and reranking runtime`。
+- [x] **Step 4：GREEN、真实模型与提交。** 新增 --require-local-models，缺模型时普通测试可跳过，要求真实模型时必须失败。下载、预热并跑两条 dense、一对相关/不相关评分及50候选计时，记录模型 revision、维度、耗时、峰值内存；不保证未测的低延迟。评审后即时记日志并提交 `feat: add bounded local embedding and reranking runtime`。
 
 ## Task 4：Milvus 原生 BM25 与双写索引
 
