@@ -491,11 +491,11 @@ remaining = deadline_value() - asyncio.get_running_loop().time()
 
 ## Task 8：应用生命周期、原文 API 与配置交付
 
-**Files:** Create `app/api/knowledge.py`、`tests/test_knowledge_api.py`、`tests/integration/test_knowledge_startup.py`；Modify `app/main.py`、`app/model.py`、`app/api/chat.py`、`app/schemas.py`、`app/config.py`、`pyproject.toml`、`.env.example`。
+**Files:** Create `app/api/knowledge.py`、`app/knowledge/calibration.py`、`tests/test_knowledge_calibration.py`、`tests/test_knowledge_api.py`、`tests/integration/test_knowledge_startup.py`；Modify `app/knowledge/milvus_store.py`、`app/main.py`、`app/model.py`、`app/api/chat.py`、`app/schemas.py`、`tests/test_milvus_store_rpc.py`、`tests/test_model.py`；Verify existing `app/config.py`、`pyproject.toml`、`.env.example`（前序任务已提供配置及prompts通配打包规则，以现有内容和实际wheel检查验收，无需重复改动）。
 
 **Interfaces:** ChatRequest增加category:可选非空字符串最长255；knowledge router提供 `GET /api/knowledge/categories` 和 `GET /api/knowledge/chunks/{id}?expected_hash=...`。`create_app` 增加可注入的knowledge_dependencies用于测试，生产统一构造仓储/本地模型/store/gateway/pipeline/runner，并在lifespan关闭。`OpenAIModelGateway.create_knowledge_gateway()->KnowledgeGateway` 在app/model.py定义，传入它持有的ChatOpenAI及受保护的chat_extra_body；不让main读取私有字段或另建未受控模型客户端。
 
-- [ ] **Step 1：写原文版本与品类 API RED。** source返回字段id/category/questions/answer/section_path/content_type/is_key_clause/prev_chunk_id/next_chunk_id/content_hash；只从MySQL读。不暴露向量/DB连接/模型密钥。GET缺行404，expected_hash不符409，非法ID/参数422。API测试为应用注入知识仓储替身，不为普通单测下载模型。
+- [x] **Step 1：写原文版本与品类 API RED。** source返回字段id/category/questions/answer/section_path/content_type/is_key_clause/prev_chunk_id/next_chunk_id/content_hash；只从MySQL读。不暴露向量/DB连接/模型密钥。GET缺行404，expected_hash不符409，非法ID/参数422。API测试为应用注入知识仓储替身，不为普通单测下载模型。
 
 ```python
 async def test_source_revision_conflict(knowledge_api_client):
@@ -508,7 +508,7 @@ knowledge_api_client fixture在本文件使用 Task1 make_chunk、注入只读�
 
 Run: `.venv/bin/python -m pytest tests/test_knowledge_api.py -q`。
 
-- [ ] **Step 2：生命周期只检查，不默默初始化。** 应用需要三表已建立、Milvus schema已兼容、模型文件已下载、校准文件与语料/模型revision相符。缺依赖返回可诊断启动错误；不在startup建库/拉模型。用线程预热两模型后才ready。沿用一个ChatOpenAI实例封装KnowledgeGateway，网关的JSON调用保留原chat额外参数与输出限制，最终只关闭一次HTTP客户端。
+- [x] **Step 2：生命周期只检查，不默默初始化。** 应用需要三表已建立、Milvus schema已兼容、模型文件已下载、校准文件与语料/模型revision相符。缺依赖返回可诊断启动错误；不在startup建库/拉模型。用线程预热两模型后才ready。沿用一个ChatOpenAI实例封装KnowledgeGateway，网关的JSON调用保留原chat额外参数与输出限制，最终只关闭一次HTTP客户端。
 
 ```python
 from fastapi import APIRouter, Request
@@ -527,7 +527,9 @@ async def read_chunk(chunk_id: int, request: Request, expected_hash: str | None 
 
 source_response 在本模块定义为上述固定白名单字段字典。所有URL由后端固定相对路径生成，哈希作为编码的query参数；业务原文安全渲染。
 
-- [ ] **Step 3：GREEN、打包和提交。** 校验启动失败能关闭已创建的模型线程/store/数据库/HTTP客户端，测试应用注入路径不受真实模型要求影响。新增prompt作为package_data包含到wheel；数据/评估CLI使用明确仓库路径，不谎称wheel自动包含演示资料。运行API回归及wheel内容检查后，评审并提交 `feat: expose knowledge sources and assemble rag lifecycle`。
+- [x] **Step 3：GREEN、打包和提交。** 校验启动失败能关闭已创建的模型线程/store/数据库/HTTP客户端，测试应用注入路径不受真实模型要求影响。新增prompt作为package_data包含到wheel；数据/评估CLI使用明确仓库路径，不谎称wheel自动包含演示资料。运行API回归及wheel内容检查后，评审并提交 `feat: expose knowledge sources and assemble rag lifecycle`。
+
+执行状态：Task8代码/本地门槛完成并独立复核通过（56684d7 + d8577f9）；完整410项通过，关闭修正覆盖18项通过，实际wheel资源检查通过。真实生产启动仍按计划等待Task9有效校准和Task11验收；当前不声称服务已切换。
 
 ## Task 9：真实评估、校准阈值与分桶报告
 
