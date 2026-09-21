@@ -36,12 +36,15 @@ def edge_order(items: Sequence[_T]) -> list[_T]:
     return list(items[::2]) + list(reversed(items[1::2]))
 
 
-def validate_citation_numbers(answer: str, allowed: set[int]) -> set[int]:
+def validate_citation_numbers(
+    answer: str, allowed: set[int], *, require_citation: bool = True,
+) -> set[int]:
+    """Always enforce allowed numbers; optionally allow an uncited answer."""
     for candidate in _BRACKETED.findall(answer):
         if candidate.isdecimal() and not candidate.isascii():
             raise ValueError("invalid citation number")
     numbers = {int(value) for value in _CITATION.findall(answer)}
-    if not numbers:
+    if require_citation and not numbers:
         raise ValueError("citation required")
     unknown = numbers - allowed
     if unknown:

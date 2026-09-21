@@ -366,3 +366,30 @@ async def test_required_context_exceeding_window_falls_back_without_model_reques
     assert gateway.calls == [] and repo.calls == {}
     assert result['budget_exhausted'] and result['answer']
     assert len([e for e in events if e['name'] == 'refusal']) == 1
+
+
+@pytest.mark.parametrize('mode', ['tools', 'generate_only'])
+@pytest.mark.asyncio
+async def test_source_free_answer_without_citations_succeeds(mode):
+    graph, state, runtime, gateway, repo = setup_agent(
+        mode=mode, decisions=[FinalControl(kind='respond')], tokens=['请提供订单号。'])
+    result, events = await collect(graph, state, runtime, repo)
+    assert result['answer'] == '请提供订单号。' and result['used_citations'] == []
+    assert not any(e['name'] in {'done', 'error', 'actions'} for e in events)
+    assert not repo.finished
+
+
+@pytest.mark.parametrize('mode', ['tools', 'generate_only'])
+@pytest.mark.parametrize('citation', ['[1]', '[１]', '[١]', '[1１]'])
+@pytest.mark.asyncio
+async def test_source_free_answer_rejects_citations_after_preserving_exact_tokens(mode, citation):
+    tokens = ['七天内', '可以退款', citation]
+    graph, state, runtime, gateway, repo = setup_agent(
+        mode=mode, decisions=[FinalControl(kind='respond')], tokens=tokens)
+    events = []
+    with pytest.raises(ServiceError) as failure:
+        await collect(graph, state, runtime, repo, events)
+    assert failure.value.code == 'INVALID_CITATION'
+    assert [e['data']['content'] for e in events if e['name'] == 'token'] == tokens
+    assert not any(e['name'] in {'done', 'error', 'actions'} for e in events)
+    assert not repo.finished and gateway.closed

@@ -207,13 +207,12 @@ def build_agent_graph(deps: AgentDependencies) -> CompiledStateGraph:
         answer = ''.join(parts)
         if not answer.strip():
             raise ServiceError('UPSTREAM_INCOMPLETE', '模型回复未正常完成，请重试', 502)
-        used_citations = []
-        if state['sources']:
-            try:
-                used_citations = sorted(validate_citation_numbers(
-                    answer, {source['number'] for source in state['sources']}))
-            except ValueError as error:
-                raise ServiceError('INVALID_CITATION', '知识回答引用无效，请重试', 502) from error
+        try:
+            used_citations = sorted(validate_citation_numbers(
+                answer, {source['number'] for source in state['sources']},
+                require_citation=bool(state['sources'])))
+        except ValueError as error:
+            raise ServiceError('INVALID_CITATION', '知识回答引用无效，请重试', 502) from error
         return {'answer': answer, 'used_citations': used_citations,
                 'suggestions': (state['control'] or {}).get('actions', []),
                 'budget': context.budget.snapshot(),

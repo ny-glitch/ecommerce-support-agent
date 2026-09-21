@@ -373,3 +373,23 @@ async def test_existing_assess_reuses_support_id_validation(
         await client.aclose()
 
     assert exc_info.value.code == "EVIDENCE_ASSESSMENT_ERROR"
+
+
+def test_optional_citation_presence_still_validates_allowed_numbers() -> None:
+    assert validate_citation_numbers('请提供订单号。', set(), require_citation=False) == set()
+    assert validate_citation_numbers('支持该协议[1]。', {1}, require_citation=False) == {1}
+    with pytest.raises(ValueError, match='unknown citation'):
+        validate_citation_numbers('支持该协议[1]。', set(), require_citation=False)
+    with pytest.raises(ValueError, match='unknown citation'):
+        validate_citation_numbers('支持该协议[2]。', {1}, require_citation=False)
+
+
+@pytest.mark.parametrize('alias', ['[１]', '[١]', '[1１]'])
+def test_optional_citation_presence_rejects_unicode_digit_aliases(alias: str) -> None:
+    with pytest.raises(ValueError, match='invalid citation'):
+        validate_citation_numbers(f'支持该协议{alias}。', set(), require_citation=False)
+
+
+def test_default_citation_presence_stays_required_with_empty_allowed_set() -> None:
+    with pytest.raises(ValueError, match='citation required'):
+        validate_citation_numbers('请提供订单号。', set())
