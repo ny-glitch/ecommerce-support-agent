@@ -1,7 +1,7 @@
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, StringConstraints, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
 
 RequestText = Annotated[
@@ -53,3 +53,16 @@ class ExtractRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     description: RequestText
+
+
+class ActionConfirmRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class ActionConfirmResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    ticket_no: str = Field(min_length=1)
+    conversation_id: str = Field(min_length=1)
+    status: Literal["completed"]
+    action_id: str = Field(min_length=1)
