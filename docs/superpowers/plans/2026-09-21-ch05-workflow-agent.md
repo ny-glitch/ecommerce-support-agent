@@ -347,7 +347,7 @@ def after_decision(state):
 
 ### Task 7: 外层固定 Workflow 图与状态事件
 
-**Files:** Create `app/workflow/graph.py`、`app/workflow/nodes.py`、`tests/test_workflow_graph.py`；Modify `tests/ch05_helpers.py`。
+**Files:** Create `app/workflow/graph.py`、`app/workflow/nodes.py`、`tests/test_workflow_graph.py`；Modify `tests/ch05_helpers.py`、`app/workflow/agent.py`、`tests/test_workflow_agent.py`（Agent 实际入口状态帧所需最小改动）。
 
 **Interfaces:** `WorkflowDependencies(settings,gateway_factory,knowledge_stage,agent_dependencies,conversations,actions,low_confidence)`；`build_workflow(deps,checkpointer)->CompiledStateGraph`；`build_nodes(deps)->dict[str,Callable]` 返回下面的固定节点名。节点通过 `StreamWriter` 发 `{"name": str,"data":dict}`，不放 ORM/异常/资源对象。子图作为 agent 节点，继承父 saver 的每次调用命名空间。
 
@@ -382,6 +382,8 @@ for name in ("agent","workflow_answer","fallback","complaint","chitchat","budget
 graph.add_edge("persist",END)
 return graph.compile(checkpointer=checkpointer)
 ```
+
+Agent 进入状态在子图实际入口统一发送一次 `workflow_status`，同时覆盖 tools/generate_only；可增加无模型调用的 child entry 节点，父图仍直接嵌入 compiled child，不包裹 ainvoke、不增加 saver、不从 classify 提前伪称已进入 Agent。状态仅含受控 node/intent/route/band，不增加终端事件。
 
 State.knowledge_target 已在 Task 2 声明，初始 None；本任务填入 Task 5 的路由函数结果。retrieve 与 evidence_gate 分别调用 Task 5 的 retrieve/assess，通过序列化快照衔接；不调用组合 run 后再重复自评。
 - [ ] fallback 用 REFUSALS 受控模板，entry_point=workflow；complaint 固定安抚加 handoff/create_ticket 草案；投诉原话超过既有 TicketInput 的 2000 字符上限时，草案取确定性前缀加 `…（已截断，完整描述见本会话）`，总长不超过 2000；较短原话完整保留，完整 user 原文始终照常审计，前端确认展示精确草案，不增加 LLM 或放宽工具 Schema；chitchat 固定“您好，我是客服助手，可以帮您查询商品、订单、物流和售后问题。”；persist 先 offer_once，再 finish_turn(event_data)，不调用 create_ticket。完成后将本轮 user/实际工具流水/最终 assistant 加入已完成 history，按原最大轮次裁剪；控制 JSON 不加入对话正文。返回 status=completed、budget.snapshot 和可展示 offers，供 Task 9 验证。
