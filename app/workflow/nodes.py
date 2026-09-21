@@ -294,18 +294,27 @@ def build_nodes(deps: WorkflowDependencies) -> dict[str, Callable]:
             else:
                 raise ValueError('invalid suggestion')
         budget = context.budget.snapshot()
+        completed_trace = _trace(state, 'persist', status='completed')
+        tools = [
+            {key: item.get(key) for key in ('name', 'tool_call_id', 'status', 'attempts')}
+            for item in state['trace'] if item.get('stage') == 'tool'
+        ]
+        assessment = state['assessment'] or {}
+        evidence = {
+            'status': state['knowledge_status'],
+            'sufficient': assessment.get('sufficient'),
+            'reason_code': assessment.get('reason_code') or state['refusal_reason'],
+            'supporting_chunk_ids': list(assessment.get('supporting_chunk_ids') or []),
+        }
         event_data = {
             'session_id': state['conversation_id'], 'turn_id': state['turn_id'],
-            'node_path': [item.get('stage') for item in state['trace']],
+            'node_path': [item.get('stage') for item in completed_trace],
             'intent': state['intent'], 'route': state['route'],
             'score': state['score'], 'band': state['band'],
             'assessment': state['assessment'],
             'sources': state['sources'], 'used_citations': state['used_citations'],
             'suggestions': state['suggestions'], 'offers': offers,
-            'tools': [
-                {key: item.get(key) for key in ('name', 'tool_call_id', 'status', 'attempts')}
-                for item in state['trace'] if item.get('stage') == 'tool'
-            ],
+            'tools': tools,
             'budget': budget,
             'elapsed_ms': max(0, int((time.monotonic() - context.started_at) * 1000)),
             'status': 'completed',
@@ -326,12 +335,13 @@ def build_nodes(deps: WorkflowDependencies) -> dict[str, Callable]:
             'session_id': state['conversation_id'], 'turn_id': state['turn_id'],
             'node_path': event_data['node_path'], 'intent': state['intent'],
             'route': state['route'], 'score': state['score'], 'band': state['band'],
+            'evidence': evidence, 'tools': tools,
             'tool_count': state['tool_count'], 'budget': budget,
             'elapsed_ms': event_data['elapsed_ms'], 'status': 'completed',
         }})
         return {'offers': offers, 'history': dump_turns(history),
                 'budget': budget, 'status': 'completed',
-                'trace': _trace(state, 'persist', status='completed')}
+                'trace': completed_trace}
 
     return {
         'resolve': resolve, 'classify': classify, 'retrieve': retrieve,

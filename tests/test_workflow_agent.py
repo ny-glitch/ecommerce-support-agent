@@ -105,6 +105,33 @@ async def test_generate_only_skips_all_decisions():
     assert [c['stage'] for c in gateway.calls] == ['answer']
 
 
+@pytest.mark.parametrize('mode,decisions', [
+    ('tools', [FinalControl(kind='respond')]),
+    ('generate_only', []),
+])
+@pytest.mark.asyncio
+async def test_actual_agent_entry_emits_one_controlled_workflow_status_before_tokens(
+    mode, decisions,
+):
+    graph, state, runtime, gateway, repo = setup_agent(
+        mode=mode, decisions=decisions, tokens=('入口后回答',))
+    state['intent'] = {'intent': 'product', 'needs_business_data': mode == 'tools'}
+    state['route'] = 'knowledge'
+    state['band'] = 'middle' if mode == 'tools' else 'low'
+
+    _result, events = await collect(graph, state, runtime, repo)
+
+    statuses = [event for event in events if event['name'] == 'workflow_status']
+    assert statuses == [{'name': 'workflow_status', 'data': {
+        'session_id': 'conversation', 'turn_id': 'turn', 'node': 'agent',
+        'stage': 'agent', 'message': '正在查询业务信息', 'intent': 'product',
+        'route': 'knowledge',
+        'band': 'middle' if mode == 'tools' else 'low',
+    }}]
+    assert events.index(statuses[0]) < next(
+        index for index, event in enumerate(events) if event['name'] == 'token')
+
+
 @pytest.mark.parametrize('bad', [proposal('create_ticket'), proposal('query_faq'), proposal('unknown'),
     AIMessage('', tool_calls=[{'name': 'query_order', 'id': '1', 'args': {}}, {'name': 'query_product', 'id': '2', 'args': {}}])])
 @pytest.mark.asyncio

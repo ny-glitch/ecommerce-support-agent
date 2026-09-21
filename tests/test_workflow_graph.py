@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import logging
 import time
 from unittest.mock import AsyncMock
 
@@ -124,13 +125,15 @@ async def execute(case):
     graph, state, runtime, gateway, stage, conversations, actions, low, trace = case
     events, result = [], None
     try:
-        async for kind, value in graph.astream(state, context=runtime,
-                stream_mode=['custom', 'values']):
-            if kind == 'custom':
+        async for item in graph.astream(
+                state, context=runtime, stream_mode=['custom', 'values'],
+                subgraphs=True, version='v2'):
+            if item['type'] == 'custom':
+                value = item['data']
                 events.append(value)
                 trace.append(('event', value['name']))
-            else:
-                result = value
+            elif item['type'] == 'values' and not item['ns']:
+                result = item['data']
     finally:
         await runtime.operations.drain()
     return result, events
@@ -173,29 +176,65 @@ async def test_all_three_knowledge_bands_classify_retrieve_and_assess_once(score
     else:
         assert result['agent_mode'] == mode
         assert [call['stage'] for call in gateway.calls][-1] == 'answer'
+        names = [event['name'] for event in events]
+        agent_index = next(index for index, event in enumerate(events)
+            if event['name'] == 'workflow_status' and event['data']['node'] == 'agent')
+        assert agent_index < names.index('token')
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('intent,expected', [
     ('order', '模型业务回答'),
+    ('logistics', '模型业务回答'),
+    ('after_sales', '模型业务回答'),
     ('complaint', '很抱歉'),
     ('chitchat', '您好，我是客服助手，可以帮您查询商品、订单、物流和售后问题。'),
 ])
 async def test_business_complaint_and_chitchat_take_fixed_distinct_exits(intent, expected):
-    decisions = [FinalControl(kind='respond')] if intent == 'order' else []
-    tokens = ('模型业务回答',) if intent == 'order' else ()
+    business = intent in {'order', 'logistics', 'after_sales'}
+    decisions = [FinalControl(kind='respond')] if business else []
+    tokens = ('模型业务回答',) if business else ()
     case = setup_workflow(intent=IntentResult(intent=intent, needs_business_data=False),
         decisions=decisions, tokens=tokens, question='我要投诉这个订单' if intent == 'complaint' else '测试')
     result, events = await execute(case)
     assert expected in result['answer']
     assert case[4].retrieve_calls == case[4].assess_calls == []
     assert [call['stage'] for call in case[3].calls].count('intent') == 1
-    if intent != 'order':
+    if not business:
         assert [call['stage'] for call in case[3].calls] == ['intent']
         assert not any(event['name'] == 'token' for event in events)
+    else:
+        agent_index = next(index for index, event in enumerate(events)
+            if event['name'] == 'workflow_status' and event['data']['node'] == 'agent')
+        token_index = next(index for index, event in enumerate(events)
+            if event['name'] == 'token')
+        assert agent_index < token_index
     if intent == 'complaint':
         assert result['suggestions'] == ['handoff', 'create_ticket']
         assert len(case[6].offered) == 1
+        assert case[-1].index(('offer', '我要投诉这个订单')) < case[-1].index(
+            ('finish', 'completed'))
+
+
+@pytest.mark.asyncio
+async def test_compound_return_refund_keeps_knowledge_gate_before_agent():
+    stage = ScriptedKnowledgeStage(knowledge_result('agent_tools', score=.75))
+    case = setup_workflow(
+        intent=IntentResult(intent='return_refund', needs_business_data=True),
+        knowledge=stage, decisions=[FinalControl(kind='respond')],
+        tokens=('该订单需结合退货政策核对。[1]',),
+        question='这个订单能否按七天无理由政策退货？')
+
+    result, events = await execute(case)
+
+    assert result['route'] == 'knowledge' and result['agent_mode'] == 'tools'
+    assert len(stage.retrieve_calls) == len(stage.assess_calls) == 1
+    assert [call['stage'] for call in case[3].calls] == ['intent', 'agent', 'answer']
+    assert len([call for call in case[3].calls if call['stage'] == 'intent']) == 1
+    names = [event['name'] for event in events]
+    agent_index = next(index for index, event in enumerate(events)
+        if event['name'] == 'workflow_status' and event['data']['node'] == 'agent')
+    assert names.index('sources') < agent_index < names.index('token')
 
 
 @pytest.mark.asyncio
@@ -294,6 +333,38 @@ async def test_persist_keeps_control_json_out_of_completed_history_and_offers_be
     assert '"kind"' not in messages[-1].content
     assert result['offers'] == [{'type': 'handoff'}]
     assert ('finish', 'completed') in case[-1]
+
+
+@pytest.mark.asyncio
+async def test_completion_log_has_safe_evidence_tools_and_completed_path(caplog):
+    stage = ScriptedKnowledgeStage(knowledge_result('agent_tools', score=.75))
+    call = AIMessage('', tool_calls=[{
+        'name': 'query_order', 'id': 'outer-call', 'args': {'order_id': 'O1'},
+    }])
+    case = setup_workflow(
+        intent=IntentResult(intent='product', needs_business_data=True),
+        knowledge=stage, decisions=[call, FinalControl(kind='respond')],
+        tokens=('已结合资料和订单核对。[1]',))
+    caplog.set_level(logging.INFO, logger='app.workflow.nodes')
+
+    await execute(case)
+
+    records = [record for record in caplog.records
+               if record.name == 'app.workflow.nodes'
+               and record.message == 'workflow turn completed']
+    assert len(records) == 1
+    payload = records[0].workflow
+    assert payload['node_path'][-1] == 'persist'
+    assert payload['evidence'] == {
+        'status': 'ok', 'sufficient': True, 'reason_code': 'supported',
+        'supporting_chunk_ids': [910001],
+    }
+    assert payload['tools'] == [{
+        'name': 'query_order', 'tool_call_id': 'outer-call',
+        'status': 'succeeded', 'attempts': 1,
+    }]
+    assert 'reason' not in payload['evidence']
+    assert 'question' not in payload and 'answer' not in payload
 
 
 @pytest.mark.asyncio

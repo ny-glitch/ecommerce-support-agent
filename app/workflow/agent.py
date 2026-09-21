@@ -218,17 +218,29 @@ def build_agent_graph(deps: AgentDependencies) -> CompiledStateGraph:
                 'budget': context.budget.snapshot(),
                 'trace': [*state['trace'], {'stage': 'answer', 'status': 'validated'}]}
 
-    def entry(state):
+    async def agent_entry(state: WorkflowState, runtime: Runtime[TurnRuntime]):
+        intent = state.get('intent') or {}
+        emit(runtime, 'workflow_status', {
+            'session_id': state['conversation_id'], 'turn_id': state['turn_id'],
+            'node': 'agent', 'stage': 'agent', 'message': '正在查询业务信息',
+            'intent': intent.get('intent'), 'route': state.get('route'),
+            'band': state.get('band'),
+        })
+        return {}
+
+    def after_entry(state):
         if state['agent_mode'] not in {'tools', 'generate_only'}:
             raise ValueError('invalid agent mode')
         return 'final' if state['agent_mode'] == 'generate_only' else 'decide'
 
     graph = StateGraph(WorkflowState, context_schema=TurnRuntime)
+    graph.add_node('entry', agent_entry)
     graph.add_node('decide', decide)
     graph.add_node('tools', execute_tools)
     graph.add_node('final', final)
     graph.add_node('budget_reply', budget_reply)
-    graph.add_conditional_edges(START, entry, ['decide', 'final'])
+    graph.add_edge(START, 'entry')
+    graph.add_conditional_edges('entry', after_entry, ['decide', 'final'])
     graph.add_conditional_edges('decide', after_decision, ['tools', 'final', 'budget_reply'])
     graph.add_conditional_edges('tools', lambda state: 'budget_reply' if state['budget_exhausted'] else 'decide', ['decide', 'budget_reply'])
     graph.add_edge('budget_reply', 'final')
