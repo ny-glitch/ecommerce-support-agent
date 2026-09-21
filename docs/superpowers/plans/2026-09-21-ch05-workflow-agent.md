@@ -421,7 +421,7 @@ service 收集 executor 的 ToolOutcome（不把工具状态伪造成聊天新�
 
 ### Task 9: 重启恢复、聊天适配与终端持久化屏障
 
-**Files:** Create `app/workflow/recovery.py`、`app/services/workflow_chat.py`、`tests/test_workflow_chat.py`、`tests/integration/test_workflow_recovery.py`；Modify `app/api/chat.py`（保持请求合同的 service 适配）、`tests/ch05_helpers.py`。
+**Files:** Create `app/workflow/recovery.py`、`app/services/workflow_chat.py`、`tests/test_workflow_chat.py`、`tests/integration/test_workflow_recovery.py`；Modify `app/api/chat.py`（保持请求合同的 service 适配）、`tests/ch05_helpers.py`、`tests/integration/test_chat_persistence.py` 与 `tests/integration/test_knowledge_chat_persistence.py`（仅对齐下述三条已过时断言）。
 
 **Interfaces:** `recover_conversation(graph,conversations,conversation_id,user_id)->list[dict]` 返回安全已完成历史；`PreparedWorkflowTurn(ref,runtime,initial_state)` 暴露可变 deadline 属性代理 runtime.deadline。`WorkflowChatService(settings,graph,conversations,guard).prepare(message,session_id,user_id='demo',*,category=None)` 为异步上下文管理器；`.stream(prepared)->AsyncIterator[ChatEvent]`、`.aclose()` 与旧 API 生命周期兼容。
 
@@ -452,6 +452,7 @@ snapshot = await graph.aget_state(config)
 `checked_chat_event(value:dict)->ChatEvent` 在 workflow_chat.py 定义，只接受规格事件；拒绝节点伪造 done/error/actions。 适配器在每个 token 转发前累计本轮部分正文，固定 message/refusal 按完整正文保存；图抛错或取消时，在真实 drain 后用已观察正文结束 failed/cancelled 审计，不依赖失败节点 checkpoint，也不从模型原始对象取推理内容。确认 graph next 为空、状态 completed、MySQL 同轮 completed 且最终内容/元数据一致，才发 actions（如有）和 done。 actions 数据固定为 `{session_id, turn_id, actions: offers}`，其中 offers 为已核验的 Task 7 持久化建议列表；done 可携带同一 turn_id，前端在有效 done 与流结束后才启用建议，失败则移除。实现该检查为 `verify_completed_turn(snapshot,turn_snapshot)->dict`，返回已经验证的 done payload。
 - [ ] 在最终 token 后注入 PG commit 失败，确保没有 done/可用 actions；断连中关闭模型流、等待在途写入、只记一次 failed/cancelled。必要清理按既有有限宽限完成，不能用释放 guard 伪装已排空。
 - [ ] 真实两库集成验证重建 service 后续聊、两个线程隔离、恢复重复执行幂等；验证旧 SSE、非法请求、上下文预算回归；提交并记账。
+- [ ] 回归发现的旧仓储断言按已批准合同对齐：取消后已写入工单仍保留且会话为 open，不再期待 human_pending；知识工具失败/结果确认丢失的审计包含独立 final 行，共 user/call:0/result:0/final 四行。保留 no refusal/done、失败状态、工具配对、问题池数量与空最终正文检查，不能仅放宽行数或删断言。不改变旧 ChatService/仓储生产行为。
 
 ### Task 10: 生产依赖组装、迁移检查与包验证
 
