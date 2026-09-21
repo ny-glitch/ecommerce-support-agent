@@ -9,11 +9,12 @@ from fastapi.sse import EventSourceResponse, ServerSentEvent
 from app.api.streaming import stream_events
 from app.schemas import ChatRequest
 from app.services.chat import PreparedTurn
+from app.services.workflow_chat import PreparedWorkflowTurn
 
 router = APIRouter()
 
 
-async def prepare_chat(body: ChatRequest, request: Request) -> AsyncIterator[PreparedTurn]:
+async def prepare_chat(body: ChatRequest, request: Request) -> AsyncIterator[PreparedTurn | PreparedWorkflowTurn]:
     service = request.app.state.chat_service
     async with service.prepare(
         body.message,
@@ -26,7 +27,7 @@ async def prepare_chat(body: ChatRequest, request: Request) -> AsyncIterator[Pre
 @router.post("/api/chat", response_class=EventSourceResponse)
 async def chat(
     request: Request,
-    prepared: Annotated[PreparedTurn, Depends(prepare_chat, scope="request")],
+    prepared: Annotated[PreparedTurn | PreparedWorkflowTurn, Depends(prepare_chat, scope="request")],
 ) -> AsyncIterator[ServerSentEvent]:
     service = request.app.state.chat_service
     async with aclosing(stream_events(

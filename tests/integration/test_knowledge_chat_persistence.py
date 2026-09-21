@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from app.db.conversations import ConversationRepository
 from app.db.knowledge_models import LowConfidenceQuestion
 from app.db.low_confidence import LowConfidenceRepository
+from app.db.models import Message
 from app.sessions import SessionGuard
 from app.services.chat import ChatService
 from app.tools.executor import ToolExecutor
@@ -61,7 +62,7 @@ async def test_large_knowledge_result_survives_database_round_trip(repos, mysql_
     assert json.loads(audit[2]["content"])["sources"][0]["answer"] == "支" * 3000
 
 
-async def test_pool_disconnect_before_write_never_appends_tool_result(repos, mysql_db) -> None:
+async def test_pool_failure_records_only_error_tool_result_and_failed_final(repos, mysql_db) -> None:
     conversations, faq, tickets = repos
 
     class DisconnectedPool:
@@ -81,8 +82,9 @@ async def test_pool_disconnect_before_write_never_appends_tool_result(repos, mys
         events = [event async for event in service.stream(prepared)]
 
     assert events[-1].data["code"] == "DATABASE_ERROR"
+    assert not any(event.name in {"refusal", "done"} for event in events)
     audit = await conversations.audit(prepared.ref.conversation_id, "demo")
-    assert [row["role"] for row in audit] == ["user", "assistant", "tool"]
+    await assert_failed_audit(mysql_db, prepared.ref, audit)
     assert {row["turn_status"] for row in audit} == {"failed"}
     assert json.loads(audit[2]["content"])["code"] == "DATABASE_ERROR"
     async with mysql_db.sessions() as session:
@@ -115,8 +117,24 @@ async def test_lost_ack_after_tool_audit_never_exposes_refusal(repos, mysql_db) 
     assert events[-1].data["code"] == "DB_ERROR"
     assert not any(event.name in {"refusal", "done"} for event in events)
     audit = await real_conversations.audit(prepared.ref.conversation_id, "demo")
-    assert [row["role"] for row in audit] == ["user", "assistant", "tool"]
+    await assert_failed_audit(mysql_db, prepared.ref, audit)
     assert {row["turn_status"] for row in audit} == {"failed"}
     async with mysql_db.sessions() as session:
         pooled = (await session.execute(select(LowConfidenceQuestion))).scalar_one()
     assert pooled.original_question == "C65-Pro支持什么协议？"
+
+
+async def assert_failed_audit(mysql_db, ref, audit):
+    assert [row["role"] for row in audit] == ["user", "assistant", "tool", "assistant"]
+    assert {row["turn_status"] for row in audit} == {"failed"}
+    assert audit[1]["tool_calls"][0]["id"] == audit[1]["tool_call_id"] == audit[2]["tool_call_id"]
+    assert audit[3]["content"] == ""
+    assert audit[3]["tool_calls"] is None and audit[3]["tool_call_id"] is None
+    async with mysql_db.sessions() as session:
+        rows = (await session.execute(select(Message.role, Message.event_key, Message.turn_status)
+            .where(Message.conversation_id == ref.conversation_id, Message.turn_id == ref.turn_id)
+            .order_by(Message.id))).all()
+    assert [tuple(row) for row in rows] == [
+        ("user", "user", "failed"), ("assistant", "call:0", "failed"),
+        ("tool", "result:0", "failed"), ("assistant", "final", "failed"),
+    ]

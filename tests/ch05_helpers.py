@@ -6,6 +6,7 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 
 from app.workflow.contracts import ActionOffer
 from app.workflow.prompts import build_workflow_messages
+from app.tools.executor import ToolExecutor
 
 
 class ScriptedWorkflowGateway:
@@ -16,6 +17,15 @@ class ScriptedWorkflowGateway:
         self.assessments = deque(assessments)
         self.calls = []
         self.closed = False
+        self._tool_calls = 0
+
+    @property
+    def model_calls(self):
+        return len(self.calls)
+
+    @property
+    def tool_calls(self):
+        return self._tool_calls
 
     def bind(self, runtime, settings):
         self.runtime, self.settings = runtime, settings
@@ -124,3 +134,15 @@ class RecordingLowConfidence:
         self.records.append((ref, question, reason_code, reason, entry_point))
         self.trace.append(('low_confidence', reason_code))
         return len(self.records)
+
+
+class RecordingToolExecutor(ToolExecutor):
+    """Count real executor entries while retaining its complete physical lifetime."""
+    def __init__(self, recorder):
+        super().__init__()
+        self.recorder = recorder
+
+    async def run(self, *args, **kwargs):
+        self.recorder._tool_calls += 1
+        async for event in super().run(*args, **kwargs):
+            yield event

@@ -85,7 +85,7 @@ async def test_committed_ticket_survives_cancellation(repos, mysql_db):
     assert {row["turn_status"] for row in audit} == {"cancelled"}
     assert json.loads(audit[2]["content"])["status"] == "ok"
     assert await h.conversations.history(p.ref.conversation_id, "demo", 12) == []
-    assert (await h.conversations.get(p.ref.conversation_id, "demo"))["status"] == "human_pending"
+    assert (await h.conversations.get(p.ref.conversation_id, "demo"))["status"] == "open"
     h.guard.acquire(p.ref.conversation_id)
     h.guard.release(p.ref.conversation_id)
 
