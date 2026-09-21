@@ -384,8 +384,9 @@ return graph.compile(checkpointer=checkpointer)
 ```
 
 State.knowledge_target 已在 Task 2 声明，初始 None；本任务填入 Task 5 的路由函数结果。retrieve 与 evidence_gate 分别调用 Task 5 的 retrieve/assess，通过序列化快照衔接；不调用组合 run 后再重复自评。
-- [ ] fallback 用 REFUSALS 受控模板，entry_point=workflow；complaint 固定安抚加 handoff/create_ticket 草案；chitchat 固定“您好，我是客服助手，可以帮您查询商品、订单、物流和售后问题。”；persist 先 offer_once，再 finish_turn(event_data)，不调用 create_ticket。完成后将本轮 user/实际工具流水/最终 assistant 加入已完成 history，按原最大轮次裁剪；控制 JSON 不加入对话正文。返回 status=completed、budget.snapshot 和可展示 offers，供 Task 9 验证。
+- [ ] fallback 用 REFUSALS 受控模板，entry_point=workflow；complaint 固定安抚加 handoff/create_ticket 草案；投诉原话超过既有 TicketInput 的 2000 字符上限时，草案取确定性前缀加 `…（已截断，完整描述见本会话）`，总长不超过 2000；较短原话完整保留，完整 user 原文始终照常审计，前端确认展示精确草案，不增加 LLM 或放宽工具 Schema；chitchat 固定“您好，我是客服助手，可以帮您查询商品、订单、物流和售后问题。”；persist 先 offer_once，再 finish_turn(event_data)，不调用 create_ticket。完成后将本轮 user/实际工具流水/最终 assistant 加入已完成 history，按原最大轮次裁剪；控制 JSON 不加入对话正文。返回 status=completed、budget.snapshot 和可展示 offers，供 Task 9 验证。
 - [ ] workflow_status 记录节点、意图、档位；固定检索的 normalizing/retrieving/reranking/checking_evidence 也用 workflow_status，不伪造 tool_call_id，页面继续兼容旧 retrieval_status。sources 在回答前发；模板使用 message、低证据用 refusal，只有 final 节点实际文本用 token。persist 写规格所列的安全结构化日志，失败日志由服务清理补齐。未完成轮次不发 actions/done；这两个终端事件归 Task 9 适配器。
+- [ ] 增加超长投诉用例：两个建议仍出现，草案长度/提示合法、完整用户原文不丢失、零建单。
 - [ ] GREEN 执行中档分类计数=1、两轮 category/sources 不串、型号错配不答、证据伪指令不能触发工具、控制 JSON 不进入气泡；补测分类前/归一化前/自评前三处预算耗尽都只给固定预算话术，不发额外 LLM 请求。记录并提交。
 
 ### Task 8: 用户确认建工单接口与独立副作用
