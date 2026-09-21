@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import TypeVar
 
 from langchain_core.messages import AIMessage, ToolMessage
@@ -21,11 +21,14 @@ from app.knowledge.contracts import (
 from app.knowledge.gateway import build_assessment_messages
 from app.knowledge.text import source_hash
 from app.prompts import knowledge_answer_system_prompt
+from app.workflow.contracts import IntentResult
+from app.workflow.prompts import build_workflow_messages
 
 
 MAX_KNOWLEDGE_RESULT_BYTES = 48_000
 ASSESSMENT_RESERVE_BYTES = 4_096
-_CITATION = re.compile(r"\[(\d+)\]")
+_CITATION = re.compile(r"\[([0-9]+)\]")
+_BRACKETED = re.compile(r"\[([^\[\]]+)\]")
 _T = TypeVar("_T")
 
 
@@ -34,6 +37,9 @@ def edge_order(items: Sequence[_T]) -> list[_T]:
 
 
 def validate_citation_numbers(answer: str, allowed: set[int]) -> set[int]:
+    for candidate in _BRACKETED.findall(answer):
+        if candidate.isdecimal() and not candidate.isascii():
+            raise ValueError("invalid citation number")
     numbers = {int(value) for value in _CITATION.findall(answer)}
     if not numbers:
         raise ValueError("citation required")
@@ -90,18 +96,12 @@ def build_knowledge_tool_message(
     )
 
 
-class EvidenceBudget:
+class EvidenceSelector:
     def __init__(
         self,
-        settings: Settings,
-        history: list[StoredTurn],
-        question: str,
-        call: AIMessage,
+        fits: Callable[[tuple[Citation, ...], QueryPlan], bool],
     ) -> None:
-        self._settings = settings
-        self._history = list(history)
-        self._question = question
-        self._call = call
+        self._fits = fits
 
     def select(
         self,
@@ -127,6 +127,27 @@ class EvidenceBudget:
             sources=(),
             dropped_ids=tuple(item.chunk.id for item in ranked),
         )
+
+
+class EvidenceBudget:
+    def __init__(
+        self,
+        settings: Settings,
+        history: list[StoredTurn],
+        question: str,
+        call: AIMessage,
+    ) -> None:
+        self._settings = settings
+        self._history = list(history)
+        self._question = question
+        self._call = call
+
+    def select(
+        self,
+        ranked: tuple[RankedChunk, ...],
+        query: QueryPlan,
+    ) -> EvidencePlan:
+        return EvidenceSelector(self._fits).select(ranked, query)
 
     def _fits(self, sources: tuple[Citation, ...], query: QueryPlan) -> bool:
         try:
@@ -165,5 +186,78 @@ class EvidenceBudget:
                 current_tool_messages=[self._call, reserved_result],
             )
             return True
+        except (ServiceError, ValueError):
+            return False
+
+
+class WorkflowEvidenceBudget:
+    """Choose whole chunks that fit every real workflow request shape.
+
+    This performs only local request construction. The runtime-bound gateway
+    remains the sole owner of cumulative reservation immediately before HTTP.
+    """
+
+    def __init__(
+        self,
+        settings: Settings,
+        history: Sequence[StoredTurn],
+        question: str,
+        intent: IntentResult,
+        tool_schemas: Sequence[dict],
+    ) -> None:
+        self._settings = settings
+        self._history = tuple(history)
+        self._question = question
+        self._intent = intent
+        self._tool_schemas = tuple(tool_schemas)
+
+    def select(
+        self,
+        ranked: tuple[RankedChunk, ...],
+        query: QueryPlan,
+    ) -> EvidencePlan:
+        return EvidenceSelector(self._fits).select(ranked, query)
+
+    def _fits(self, sources: tuple[Citation, ...], query: QueryPlan) -> bool:
+        try:
+            evidence = build_workflow_messages(
+                "evidence",
+                settings=self._settings,
+                question=self._question,
+                sources=sources,
+                intent=self._intent,
+                normalized_question=query.normalized,
+            )
+            agent = build_workflow_messages(
+                "agent",
+                settings=self._settings,
+                question=self._question,
+                history=self._history,
+                sources=sources,
+                intent=self._intent,
+                tool_schemas=self._tool_schemas,
+            )
+            answer = build_workflow_messages(
+                "answer",
+                settings=self._settings,
+                question=self._question,
+                history=self._history,
+                sources=sources,
+                intent=self._intent,
+            )
+            # Force construction of all three bounded windows before accepting.
+            if not (evidence.messages and agent.messages and answer.messages):
+                return False
+            placeholder = KnowledgeDecision(
+                query=query,
+                status="ok",
+                sources=sources,
+                assessment=None,
+                reason_code=None,
+                refusal=None,
+            )
+            return len(_compact_json(placeholder.to_payload()).encode("utf-8")) <= (
+                MAX_KNOWLEDGE_RESULT_BYTES - ASSESSMENT_RESERVE_BYTES
+            )
         except (ServiceError, ValueError):
             return False

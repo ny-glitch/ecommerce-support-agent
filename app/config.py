@@ -18,6 +18,7 @@ EmbeddingModel = Literal["BAAI/bge-m3"]
 EmbeddingRevision = Literal["5617a9f61b028005a4858fdac845db406aefb181"]
 RerankerModel = Literal["BAAI/bge-reranker-v2-m3"]
 RerankerRevision = Literal["953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e"]
+UnitFloat = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
 _HTTP_URL_ADAPTER = TypeAdapter(HttpUrl)
 _PROTECTED_CHAT_BODY_KEYS = frozenset(
     {
@@ -64,6 +65,8 @@ class Settings(BaseSettings):
     agent_max_tool_calls: Annotated[int, Field(ge=1, le=4)] = 4
     agent_max_decisions: Annotated[int, Field(ge=1, le=5)] = 5
     turn_model_budget: Annotated[int, Field(ge=1, le=49152)] = 49152
+    workflow_knowledge_lower_threshold: UnitFloat = 0.7
+    workflow_knowledge_upper_threshold: UnitFloat = 0.8
     milvus_uri: str = "http://127.0.0.1:19530"
     milvus_collection: str = "knowledge"
     milvus_token: SecretStr | None = None
@@ -108,6 +111,13 @@ class Settings(BaseSettings):
         if self.context_window_tokens <= reserved_tokens:
             raise ValueError(
                 "Context window must leave room beyond output and safety budgets"
+            )
+        if (
+            self.workflow_knowledge_lower_threshold
+            >= self.workflow_knowledge_upper_threshold
+        ):
+            raise ValueError(
+                "Workflow knowledge lower threshold must be below upper threshold"
             )
         return self
 

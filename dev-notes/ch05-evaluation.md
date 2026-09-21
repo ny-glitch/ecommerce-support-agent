@@ -67,3 +67,24 @@ The review applies these rules: greetings do not override a business request; ex
 | intent-035 | chitchat | no | Non-business small talk. |
 
 All 35 rows were checked for the exact five-field shape (`id`, `question`, `history`, `expected_intent`, `needs_business_data`), valid strict DTO values, unique IDs, and five cases per label. This is a human label review, not a review of model predictions.
+
+## Evidence and routing labels
+
+`evals/ch05/evidence.jsonl` contains 12 locally authored cases. Each row has the question, intent, candidate source snapshots, `expected_sufficient`, `supporting_chunk_ids`, `needs_business_data`, and a manual reason. It deliberately has no retrieval score field: phrases such as “low relevance” describe the controlled coverage category and do not claim a measured reranker result.
+
+| ID | Coverage | Expected | Business data | Manual rationale |
+| --- | --- | --- | --- | --- |
+| evidence-001 | Complete product fact | sufficient | no | Same model; protocol and power limit are explicit. |
+| evidence-002 | Model mismatch | insufficient | no | C65-Air evidence cannot support a C65-Pro answer. |
+| evidence-003 | No answer | insufficient | no | Empty candidates cannot support a model answer. |
+| evidence-004 | Missing policy conditions | insufficient | no | Time limit alone omits opened/used eligibility and exceptions. |
+| evidence-005 | Cross-chunk support | sufficient | no | Two cited blocks jointly cover eligibility and application steps. |
+| evidence-006 | Low-relevance complete fact | sufficient | no | Text fully covers object, compatibility, action, and power limit; no score is invented. |
+| evidence-007 | Source prompt injection | insufficient | no | The source contains only a model-directed instruction, not a product fact. |
+| evidence-008 | Conflicting sources | insufficient | no | 65W and 45W conflict on the requested key fact. |
+| evidence-009 | Policy then business lookup | sufficient | yes | Static policy is complete; order date/state must be queried only after the gate. |
+| evidence-010 | Ambiguous object | insufficient | no | The unresolved pronoun maps to candidates with opposite facts. |
+| evidence-011 | Supported negative limit | sufficient | no | The evidence explicitly states both the unsupported port and supported alternative. |
+| evidence-012 | Unknown policy exception | insufficient | no | Ordinary-goods policy does not cover customized engraving. |
+
+All supporting IDs were manually checked against the candidate list. Sufficient rows name at least one supporting source; refusal rows name none. These labels have not entered any model request. Real evidence-gate accuracy and routing measurements remain `PENDING_USER_REPLY` with the existing external data-send gate.

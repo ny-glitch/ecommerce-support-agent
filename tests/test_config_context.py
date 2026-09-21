@@ -80,6 +80,43 @@ def test_settings_defaults_include_cross_provider_token_field() -> None:
     assert result.session_ttl_seconds == 3600
     assert result.max_sessions == 100
     assert result.request_timeout_seconds == 60
+    assert result.workflow_knowledge_lower_threshold == .7
+    assert result.workflow_knowledge_upper_threshold == .8
+
+
+def test_environment_configures_workflow_knowledge_thresholds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WORKFLOW_KNOWLEDGE_LOWER_THRESHOLD", "0.6")
+    monkeypatch.setenv("WORKFLOW_KNOWLEDGE_UPPER_THRESHOLD", "0.9")
+
+    result = Settings(
+        _env_file=None,
+        llm_base_url="https://api.example.com/v1",
+        llm_model="model",
+        llm_api_key="secret-key",
+    )
+
+    assert result.workflow_knowledge_lower_threshold == .6
+    assert result.workflow_knowledge_upper_threshold == .9
+
+
+@pytest.mark.parametrize(
+    ("lower", "upper"),
+    [(.8, .7), (.7, .7), (-.1, .8), (.7, 1.1), (float("nan"), .8), (.7, float("inf"))],
+)
+def test_settings_rejects_invalid_workflow_knowledge_thresholds(
+    lower: float, upper: float
+) -> None:
+    with pytest.raises(ValidationError):
+        Settings(
+            _env_file=None,
+            llm_base_url="https://api.example.com/v1",
+            llm_model="model",
+            llm_api_key="secret-key",
+            workflow_knowledge_lower_threshold=lower,
+            workflow_knowledge_upper_threshold=upper,
+        )
 
 
 @pytest.mark.parametrize(

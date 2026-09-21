@@ -89,6 +89,12 @@ def test_unknown_or_missing_citation_is_generation_error() -> None:
     assert validate_citation_numbers("分别支持[1][2]。", {1, 2}) == {1, 2}
 
 
+@pytest.mark.parametrize("alias", ["[１]", "[١]"])
+def test_unicode_digit_citation_alias_is_rejected_even_beside_ascii(alias: str) -> None:
+    with pytest.raises(ValueError, match="invalid citation"):
+        validate_citation_numbers(f"支持该协议[1]，另一说法{alias}。", {1})
+
+
 def test_contracts_reject_invalid_bounds_and_oversized_payload() -> None:
     with pytest.raises(ValidationError):
         Citation(

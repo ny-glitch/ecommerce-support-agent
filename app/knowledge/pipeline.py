@@ -47,6 +47,16 @@ class _Retriever(Protocol):
     ) -> RetrievalResult: ...
 
 
+class _EvidenceBudget(Protocol):
+    def select(self, ranked, query): ...
+
+
+class _EvidenceGateway(Protocol):
+    async def assess(
+        self, question, sources, *, normalized_question
+    ) -> EvidenceAssessment: ...
+
+
 def _refusal(
     query: QueryPlan,
     reason_code: str,
@@ -75,9 +85,9 @@ def _assessment_error() -> ServiceError:
 async def decide_evidence(
     query: QueryPlan,
     retrieval: RetrievalResult,
-    budget: EvidenceBudget,
+    budget: _EvidenceBudget,
     *,
-    gateway: KnowledgeGateway,
+    gateway: _EvidenceGateway,
     threshold: float | None,
     deadline: float,
 ) -> KnowledgeDecision:
