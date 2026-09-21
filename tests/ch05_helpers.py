@@ -4,6 +4,7 @@ from copy import deepcopy
 
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
+from app.workflow.contracts import ActionOffer
 from app.workflow.prompts import build_workflow_messages
 
 
@@ -94,3 +95,32 @@ class RecordingConversations:
     async def finish_turn(self, ref, content, status, *, event_data=None):
         self.finished.append((ref, content, status, event_data))
         self.trace.append(('finish', status))
+
+
+class RecordingActions:
+    def __init__(self, trace=None):
+        self.trace = trace if trace is not None else []
+        self.offered = []
+
+    async def offer_once(self, ref, user_id, draft):
+        self.offered.append((ref, user_id, draft))
+        self.trace.append(('offer', draft.issue_description))
+        return ActionOffer(
+            action_id=f'action-{ref.turn_id}',
+            conversation_id=ref.conversation_id,
+            turn_id=ref.turn_id,
+            ticket_no=f'TK-{ref.turn_id}',
+            draft=draft,
+            status='offered',
+        )
+
+
+class RecordingLowConfidence:
+    def __init__(self, trace=None):
+        self.trace = trace if trace is not None else []
+        self.records = []
+
+    async def record_once(self, ref, question, reason_code, reason, entry_point='chat'):
+        self.records.append((ref, question, reason_code, reason, entry_point))
+        self.trace.append(('low_confidence', reason_code))
+        return len(self.records)
