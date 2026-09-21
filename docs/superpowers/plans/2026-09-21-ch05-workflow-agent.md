@@ -456,7 +456,7 @@ snapshot = await graph.aget_state(config)
 
 ### Task 10: 生产依赖组装、迁移检查与包验证
 
-**Files:** Create `app/workflow/bootstrap.py`、`app/knowledge/bootstrap.py`、`tests/integration/test_workflow_startup.py`；Modify `app/main.py`、`app/model.py`、`app/resource_lifecycle.py`（仅实际必要变更）、`.env.example`、`README.md`、已有 startup 测试。
+**Files:** Create `app/workflow/bootstrap.py`、`app/knowledge/bootstrap.py`、`tests/integration/test_workflow_startup.py`；Modify `app/main.py`、`app/model.py`、`app/resource_lifecycle.py`（仅实际必要变更）、`.env.example`、`README.md`、`tests/integration/test_knowledge_startup.py`（bootstrap 提取后的替身归属）、`tests/test_tool_api.py`（三个旧启动用例改为显式知识依赖注入）。
 
 **Interfaces:** `KnowledgeComponents(repository,store,local_models,retriever,low_confidence,knowledge_gateway_factory)`；`build_knowledge_components(settings,database,model_gateway,owned_resources)->KnowledgeComponents` 公开复用现有非创建校验/预热。`build_workflow_dependencies(settings,database,model_gateway,components)->WorkflowDependencies`。`create_app` 保留显式 chat_service/knowledge_dependencies 测试注入，增加显式 workflow_dependencies；正常无注入启动必须使用 WorkflowChatService，不在失败时回落旧聊天实现。
 
