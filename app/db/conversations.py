@@ -28,24 +28,48 @@ def same_event(existing: Message, candidate: dict) -> bool:
                ('role', 'content', 'tool_calls', 'tool_call_id', 'event_data'))
 
 
+def _stored_tool_calls(value):
+    """Validate persisted JSON before AIMessage can normalize or discard fields.
+
+    This checks raw shape only. Turn ordering and call/result pairing continue
+    to belong to validate_turn_messages.
+    """
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError('stored tool calls must be a list')
+    for call in value:
+        if (
+            not isinstance(call, dict)
+            or set(call) != {'name', 'args', 'id', 'type'}
+            or not isinstance(call['name'], str) or not call['name']
+            or not isinstance(call['args'], dict)
+            or not isinstance(call['id'], str) or not call['id']
+            or call['type'] != 'tool_call'
+        ):
+            raise ValueError('invalid stored tool call')
+    return value
+
+
 def _messages(rows):
     messages = []
     for row in rows:
+        calls = _stored_tool_calls(row.tool_calls)
         if row.role == 'user':
-            if row.tool_calls or row.tool_call_id:
+            if calls or row.tool_call_id:
                 raise ValueError('user tool fields')
             messages.append(HumanMessage(content=row.content))
         elif row.role == 'assistant':
-            if row.tool_calls:
-                if len(row.tool_calls) != 1 or row.tool_calls[0].get('id') != row.tool_call_id:
+            if calls:
+                if len(calls) != 1 or calls[0]['id'] != row.tool_call_id:
                     raise ValueError('call identity')
-                messages.append(AIMessage(content=row.content, tool_calls=row.tool_calls))
+                messages.append(AIMessage(content=row.content, tool_calls=calls))
             else:
                 if row.tool_call_id:
                     raise ValueError('orphan call identity')
                 messages.append(AIMessage(content=row.content))
         elif row.role == 'tool':
-            if row.tool_calls or not row.tool_call_id:
+            if calls or not row.tool_call_id:
                 raise ValueError('invalid tool fields')
             messages.append(ToolMessage(content=row.content, tool_call_id=row.tool_call_id))
         else:

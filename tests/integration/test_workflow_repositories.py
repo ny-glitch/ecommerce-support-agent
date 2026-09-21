@@ -249,3 +249,52 @@ async def test_ticket_owner_and_number_are_exact(repos, new_turn):
     for number, user in (('tk-exact','demo'),('TK-EXACT','DEMO')):
         with pytest.raises(ServiceError):
             await tickets.create_once(number,new_turn.conversation_id,user,'问题','other')
+
+
+@pytest.mark.parametrize('raw_calls', [
+    pytest.param(['malformed'], id='non-dict-element'),
+    pytest.param('malformed', id='non-list-container'),
+    pytest.param([{'name':'query_order','args':{},'id':'call-0','type':'wrong'}], id='wrong-type'),
+    pytest.param([{'name':'query_order','args':{},'id':'call-0'}], id='missing-type'),
+    pytest.param([{'args':{},'id':'call-0','type':'tool_call'}], id='missing-name'),
+    pytest.param([{'name':'query_order','args':[],'id':'call-0','type':'tool_call'}], id='non-dict-args'),
+    pytest.param([{'name':'query_order','args':{},'id':1,'type':'tool_call'}], id='non-string-id'),
+])
+@pytest.mark.parametrize('reader', ['history', 'snapshot', 'action'])
+async def test_raw_corrupt_tool_calls_never_enter_restored_turns(
+    repos, new_turn, mysql_db, raw_calls, reader
+):
+    """Raw JSON validation must precede LangChain normalization for every reader."""
+    from app.db.actions import ActionRepository
+    repo, _, _ = repos
+    actions = ActionRepository(mysql_db.sessions)
+    await repo.start_turn(new_turn, 'demo', '问题')
+    await repo.append_call(new_turn, call(0))
+    await repo.append_result(new_turn, ToolMessage(content='结果', tool_call_id='call-0'))
+    offer = await actions.offer_once(new_turn, 'demo', TicketInput(issue_description='问题', ticket_type='other'))
+    await repo.finish_turn(new_turn, '回答', 'completed')
+    async with mysql_db.sessions.begin() as session:
+        await session.execute(update(Message).where(
+            Message.conversation_id == new_turn.conversation_id,
+            Message.turn_id == new_turn.turn_id,
+            Message.event_key == 'call:0',
+        ).values(tool_calls=raw_calls))
+
+    if reader == 'history':
+        valid = TurnRef(new_turn.conversation_id, str(uuid4()))
+        await repo.start_turn(valid, 'demo', '后续合法问题')
+        await repo.finish_turn(valid, '后续合法回答', 'completed')
+        history = await repo.history(new_turn.conversation_id, 'demo', 12)
+        assert [turn.turn_id for turn in history] == [valid.turn_id]
+    else:
+        with pytest.raises(ServiceError) as err:
+            if reader == 'snapshot':
+                await repo.get_turn(new_turn, 'demo')
+            else:
+                await actions.get_confirmable(new_turn.conversation_id, offer.action_id, 'demo')
+        assert err.value.code == 'TURN_INVALID'
+        assert err.value.status_code == 409
+
+    # Invalid input remains queryable as audit data; rejection never rewrites it.
+    audit = await repo.audit(new_turn.conversation_id, 'demo')
+    assert next(row for row in audit if row['role'] == 'assistant' and row['tool_call_id'])['tool_calls'] == raw_calls
