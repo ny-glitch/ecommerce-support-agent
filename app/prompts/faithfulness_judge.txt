@@ -3,7 +3,7 @@
 把最终回答拆成最小、可核实的原子陈述。对每条陈述：
 1. statement 保留原意，不合并不同事实。
 2. supported 仅在 sources 直接支持该陈述时为 true。
-3. supported 为 true 时，source_ids 必须列出支持它的 source chunk_id；为 false 时必须为空数组。
+3. supported 为 true 时，source_ids 必须列出支持它的 source chunk_id；为 false 时必须为空数组。source_ids 的值必须逐字复制对应 source 的 chunk_id，绝不能使用 source 的 number 展示序号或最终回答中的 [1]、[2] 等括号引用编号。例如，若 source 的 number 为 2、chunk_id 为 123456，则应写 source_ids 为 [123456]，不能写 [2]。
 4. reason 用简短可审计的说明解释判断，不输出隐藏推理或与判断无关的内容。
 5. 礼貌用语、纯拒答和没有可核实事实的句子不算原子陈述；若完全没有可核实陈述，claims 返回空数组。
 
