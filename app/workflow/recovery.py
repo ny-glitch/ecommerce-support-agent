@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import math
 from types import SimpleNamespace
 
 from app.db.contracts import StoredTurn, TurnRef
@@ -36,6 +37,50 @@ def _audit_history(turn):
     return dump_turns([StoredTurn(turn.ref.turn_id, turn.messages)])
 
 
+def _score_equal(checkpoint, mysql):
+    if type(checkpoint) is not float or type(mysql) is not float:
+        return False
+    if not math.isfinite(checkpoint) or not math.isfinite(mysql):
+        return False
+    # MySQL JSON normalization may return the adjacent binary64 value.
+    # Permit that single storage roundtrip step and no wider tolerance.
+    return checkpoint == mysql or math.nextafter(checkpoint, mysql) == mysql
+
+
+def _sources_equal(checkpoint, mysql):
+    if type(checkpoint) is not list or type(mysql) is not list or len(checkpoint) != len(mysql):
+        return False
+    for checkpoint_source, mysql_source in zip(checkpoint, mysql, strict=True):
+        if (type(checkpoint_source) is not dict or type(mysql_source) is not dict
+                or checkpoint_source.keys() != mysql_source.keys()):
+            return False
+        for key in checkpoint_source:
+            if key == 'score':
+                if not _score_equal(checkpoint_source[key], mysql_source[key]):
+                    return False
+            elif checkpoint_source[key] != mysql_source[key]:
+                return False
+    return True
+
+
+def _metadata_matches(state, metadata, fields=_METADATA_FIELDS):
+    for key in fields:
+        if key not in state or key not in metadata:
+            return False
+        if key == 'score':
+            if state[key] is None or metadata[key] is None:
+                if state[key] is not metadata[key]:
+                    return False
+            elif not _score_equal(state[key], metadata[key]):
+                return False
+        elif key == 'sources':
+            if not _sources_equal(state[key], metadata[key]):
+                return False
+        elif state[key] != metadata[key]:
+            return False
+    return True
+
+
 def verify_completed_turn(snapshot, turn_snapshot) -> dict:
     try:
         state, turn = snapshot.values, turn_snapshot
@@ -50,7 +95,7 @@ def verify_completed_turn(snapshot, turn_snapshot) -> dict:
         if (metadata['session_id'] != turn.ref.conversation_id
                 or metadata['turn_id'] != turn.ref.turn_id
                 or metadata['status'] != 'completed'
-                or any(state[key] != metadata[key] for key in _METADATA_FIELDS)):
+                or not _metadata_matches(state, metadata)):
             raise ValueError()
         trace = state['trace']
         tools = [{key: item.get(key) for key in ('name', 'tool_call_id', 'status', 'attempts')}
@@ -137,9 +182,8 @@ async def recover_conversation(graph, conversations, conversation_id, user_id) -
                     if business(settled) != business(expected):
                         raise recovery_conflict()
                     metadata = current.event_data or {}
-                    if (any(key not in metadata for key in _METADATA_FIELDS)
-                            or any(state[key] != metadata[key] for key in _METADATA_FIELDS
-                                   if key not in {'offers', 'budget'})):
+                    if not _metadata_matches(state, metadata, tuple(
+                            key for key in _METADATA_FIELDS if key not in {'offers', 'budget'})):
                         raise recovery_conflict()
                     repaired_trace = deepcopy(state['trace'])
                     if state['status'] != 'completed':

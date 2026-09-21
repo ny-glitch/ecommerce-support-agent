@@ -1,5 +1,6 @@
 """Adapter boundary tests; durable database behavior lives in integration."""
 from copy import deepcopy
+import math
 from types import SimpleNamespace
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -55,6 +56,41 @@ def test_completion_barrier_compares_persisted_business_fields_without_optional_
     snapshot.next = ('persist',)
     with pytest.raises(ServiceError):
         verify_completed_turn(snapshot, audit)
+
+
+def test_completion_barrier_tolerates_only_machine_precision_score_roundtrip():
+    from app.services.workflow_chat import verify_completed_turn
+    checkpoint_score = 0.10740864967980515
+    mysql_score = 0.10740864967980517
+    snapshot, audit = completed_pair()
+    snapshot.values['score'] = checkpoint_score
+    audit.event_data['score'] = mysql_score
+    source = {'chunk_id': 910071, 'score': checkpoint_score, 'category': '个护电器'}
+    snapshot.values['sources'] = [source]
+    audit.event_data['sources'] = [{**source, 'score': mysql_score}]
+    assert verify_completed_turn(snapshot, audit)['status'] == 'completed'
+    snapshot.values['score'], audit.event_data['score'] = mysql_score, checkpoint_score
+    snapshot.values['sources'][0]['score'] = mysql_score
+    audit.event_data['sources'][0]['score'] = checkpoint_score
+    assert verify_completed_turn(snapshot, audit)['status'] == 'completed'
+    snapshot.values['score'] = checkpoint_score
+    snapshot.values['sources'][0]['score'] = checkpoint_score
+    audit.event_data['sources'][0]['score'] = mysql_score
+    two_ulps = math.nextafter(mysql_score, math.inf)
+
+    for field, value in (
+        ('score', two_ulps),
+        ('score', checkpoint_score + 0.01),
+        ('score', True),
+        ('score', float('inf')),
+        ('score', float('nan')),
+        ('sources', [{**source, 'category': '不同分类', 'score': mysql_score}]),
+        ('sources', [{**source, 'score': True}]),
+    ):
+        conflicting = deepcopy(audit)
+        conflicting.event_data[field] = value
+        with pytest.raises(ServiceError):
+            verify_completed_turn(snapshot, conflicting)
 
 
 async def test_oversized_intent_rejected_before_creating_durable_state():

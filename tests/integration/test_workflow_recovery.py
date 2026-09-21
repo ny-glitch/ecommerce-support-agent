@@ -1,6 +1,7 @@
 """Real PostgreSQL + MySQL acceptance; scripted model only, no external calls."""
 import asyncio
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from uuid import uuid4
 from unittest.mock import AsyncMock
 
@@ -377,6 +378,62 @@ async def test_actual_knowledge_child_entry_precedes_final_token(mysql_db, check
                      if event.name == 'workflow_status' and event.data['node'] == 'agent')
         assert names.index('sources') < entry < names.index('token')
         assert events[-1].name == 'done' and events[-1].data['citations'] == [1]
+
+
+async def test_score_survives_mysql_json_and_postgres_checkpoint_roundtrip(
+        mysql_db, checkpoint_settings):
+    from app.workflow.recovery import recover_conversation
+    checkpoint_score = 0.10740864967980515
+    mysql_score = 0.10740864967980517
+    result = knowledge_result('workflow_answer')
+    source = result.decision.sources[0].model_copy(update={'score': checkpoint_score})
+    result = replace(result, decision=replace(result.decision, sources=(source,)))
+    async with service_case(mysql_db, checkpoint_settings, intents=('product',),
+            knowledge=result) as (service, graph, repo, *_):
+        cid = await create_session(repo)
+        completed, events = await run_turn(service, cid, '支持什么协议？')
+        config = {'configurable': {'thread_id': cid}}
+        checkpoint = await graph.aget_state(config)
+        audit = await repo.get_turn(completed.ref, 'demo')
+        assert checkpoint.values['sources'][0]['score'] == checkpoint_score
+        assert audit.event_data['sources'][0]['score'] == mysql_score
+        assert checkpoint.values['sources'][0]['score'] != audit.event_data['sources'][0]['score']
+        assert events[-1].name == 'done'
+
+    async with service_case(mysql_db, checkpoint_settings, intents=()) as (_, graph, repo, *_):
+        recovered = await recover_conversation(graph, repo, cid, 'demo')
+        assert recovered[-1]['turn_id'] == completed.ref.turn_id
+
+
+async def test_score_roundtrip_allows_acknowledgement_loss_repair(
+        mysql_db, checkpoint_settings, monkeypatch):
+    from app.workflow.recovery import recover_conversation
+    checkpoint_score = 0.10740864967980515
+    result = knowledge_result('workflow_answer')
+    source = result.decision.sources[0].model_copy(update={'score': checkpoint_score})
+    result = replace(result, decision=replace(result.decision, sources=(source,)))
+    async with service_case(mysql_db, checkpoint_settings, intents=('product',),
+            knowledge=result) as (service, _, repo, *_):
+        cid = await create_session(repo)
+        original_finish = repo.finish_turn
+        fired = False
+
+        async def lose_completed_ack(ref, content, status, **kwargs):
+            nonlocal fired
+            await original_finish(ref, content, status, **kwargs)
+            if status == 'completed' and not fired:
+                fired = True
+                raise RuntimeError('injected audit acknowledgement failure')
+
+        monkeypatch.setattr(repo, 'finish_turn', lose_completed_ack)
+        completed, events = await run_turn(service, cid, '支持什么协议？')
+        assert fired and events[-1].name == 'error'
+
+    async with service_case(mysql_db, checkpoint_settings, intents=()) as (_, graph, repo, *_):
+        recovered = await recover_conversation(graph, repo, cid, 'demo')
+        assert recovered[-1]['turn_id'] == completed.ref.turn_id
+        repaired = await graph.aget_state({'configurable': {'thread_id': cid}})
+        assert repaired.next == () and repaired.tasks == ()
 
 
 @pytest.mark.parametrize('conflict', ['empty_tools', 'prefix_tools', 'node_path', 'tool_summary', 'missing_answer'])
