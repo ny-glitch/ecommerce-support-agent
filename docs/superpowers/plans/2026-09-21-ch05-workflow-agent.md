@@ -110,7 +110,7 @@ async with asyncio.timeout_at(deadline):
 
 **Interfaces:** `CheckpointStore(settings: Settings, *, test_mode: bool=False)` 提供 `async open() -> AsyncPostgresSaver`、`async setup() -> None`、`async check() -> None`、`async aclose() -> None`；open/check 不建表，只有 setup 显式创建官方表。Settings 新增 `checkpoint_database_url: SecretStr | None`，测试配置单独使用 `TEST_CHECKPOINT_DATABASE_URL`。
 
-- [ ] 先写 RED：正常 open 不调用 setup、缺表安全报错且无连接串、重复关闭只关一次；真实 PostgreSQL saver 重新创建后能读取相同 thread_id 的值。下面的测试放在 integration 文件，checkpoint_settings 来自该目录 fixture；其余生命周期单测使用受控 saver/context manager，不访问数据库。
+- [x] 先写 RED：正常 open 不调用 setup、缺表安全报错且无连接串、重复关闭只关一次；真实 PostgreSQL saver 重新创建后能读取相同 thread_id 的值。下面的测试放在 integration 文件，checkpoint_settings 来自该目录 fixture；其余生命周期单测使用受控 saver/context manager，不访问数据库。
 
 ```python
 async def test_open_never_creates_schema(monkeypatch, checkpoint_settings):
@@ -127,13 +127,13 @@ async def test_open_never_creates_schema(monkeypatch, checkpoint_settings):
         await store.aclose()
 ```
 
-- [ ] 用 `.venv/bin/python -m pytest tests/test_workflow_checkpoints.py -q` 确认缺模块/行为 RED。先做依赖 dry-run，核对当前 Python 3.13 与现有 LangChain pin，再安装精确版本并运行 `pip check`：
+- [x] 用 `.venv/bin/python -m pytest tests/test_workflow_checkpoints.py -q` 确认缺模块/行为 RED。先做依赖 dry-run，核对当前 Python 3.13 与现有 LangChain pin，再安装精确版本并运行 `pip check`：
 
 ```bash
 .venv/bin/python -m pip install --dry-run 'langgraph==1.2.11' 'langgraph-checkpoint-postgres==3.1.2' 'psycopg[binary,pool]==3.3.6' 'langchain-core==1.6.3' 'langchain-openai==1.6.2'
 ```
 
-- [ ] Context7 + 安装源码确认 `AsyncPostgresSaver.from_conn_string`、`setup`、`aget_tuple`、关闭语义；采用异步上下文管理器由 store 持有。本任务初始化脚本调用 setup，并交付可独立测试的 check 方法；普通应用启动的 open/check 调用由 Task 10 的生产装配接入，其缺表启动失败测试为最终门槛。空测试 thread_id 的 `aget_tuple` 用于只读探测表可用性。
+- [x] Context7 + 安装源码确认 `AsyncPostgresSaver.from_conn_string`、`setup`、`aget_tuple`、关闭语义；采用异步上下文管理器由 store 持有。本任务初始化脚本调用 setup，并交付可独立测试的 check 方法；普通应用启动的 open/check 调用由 Task 10 的生产装配接入，其缺表启动失败测试为最终门槛。空测试 thread_id 的 `aget_tuple` 用于只读探测表可用性。
 
 ```python
 manager = AsyncPostgresSaver.from_conn_string(url)
@@ -141,9 +141,9 @@ saver = await manager.__aenter__()
 await saver.aget_tuple({"configurable": {"thread_id": "healthcheck-only"}})
 ```
 
-- [ ] 添加 `workflow-db`/`test-workflow-db`，候选镜像 `postgres:17.11`，端口 `127.0.0.1:5433/15433 → 5432`，库/用户 `support_graph` 与 `support_graph_test`，独立卷，测试服务使用 test profile。镜像拉取前核对 arm64 清单；只新增所需本地密码，保留原 `.env`，不输出内容。测试 DSN 必须匹配 127.0.0.1:15433、测试库/用户，cleanup 只删除测试 thread 前缀，不 truncate 演示库。
-- [ ] 增加 `--require-postgres`，运行 focused 与真实持久化测试；测试示例的 `checkpoint_settings` fixture 指向已显式 setup 的独立测试库。用 state 为 `{"count": 0}` 的单节点图写成 1，关闭连接，再用新 saver/graph `aget_state` 验证仍为 1；验证第二个 thread 不可见该值。
-- [ ] 记录版本、镜像 digest、API 实测、RED/GREEN；精确提交本任务文件与开发记录。
+- [x] 添加 `workflow-db`/`test-workflow-db`，候选镜像 `postgres:17.11`，端口 `127.0.0.1:5433/15433 → 5432`，库/用户 `support_graph` 与 `support_graph_test`，独立卷，测试服务使用 test profile。镜像拉取前核对 arm64 清单；只新增所需本地密码，保留原 `.env`，不输出内容。测试 DSN 必须匹配 127.0.0.1:15433、测试库/用户，cleanup 只删除测试 thread 前缀，不 truncate 演示库。
+- [x] 增加 `--require-postgres`，运行 focused 与真实持久化测试；测试示例的 `checkpoint_settings` fixture 指向已显式 setup 的独立测试库。用 state 为 `{"count": 0}` 的单节点图写成 1，关闭连接，再用新 saver/graph `aget_state` 验证仍为 1；验证第二个 thread 不可见该值。
+- [x] 记录版本、镜像 digest、API 实测、RED/GREEN；精确提交本任务文件与开发记录。
 
 ### Task 2: State、固定路由、预算与取消操作
 
