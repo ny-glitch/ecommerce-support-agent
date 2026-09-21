@@ -500,7 +500,7 @@ handoffButton.addEventListener('click', () => {
 
 ### Task 12: 标注评估、真实演示与完成交付
 
-**Files:** Create `app/workflow/evaluation.py`、`app/evaluation_io.py`、`scripts/evaluate_workflow.py`、`scripts/demo_workflow.py`、`tests/test_workflow_evaluation.py`、`tests/test_workflow_demo.py`；Modify `app/knowledge/evaluation.py`、`app/knowledge/evaluation_artifacts.py`（仅通用文件 I/O 提取）、`evals/ch05/intents.jsonl`、`evals/ch05/evidence.jsonl`、`dev-notes/ch05-evaluation.md`、`dev-notes/ch05.md`、`README.md`。
+**Files:** Create `app/workflow/evaluation.py`、`app/evaluation_io.py`、`scripts/evaluate_workflow.py`、`scripts/demo_workflow.py`、`tests/test_workflow_evaluation.py`、`tests/test_workflow_demo.py`；Modify `app/knowledge/evaluation.py`、`app/knowledge/evaluation_artifacts.py`（仅通用文件 I/O 提取）、`evals/ch05/intents.jsonl`、`evals/ch05/evidence.jsonl`（复用已校验标注；仅发现独立可证的标注错误时修正并留痕，不能迎合模型输出改真值）、`dev-notes/ch05-evaluation.md`、`dev-notes/ch05.md`、`README.md`。
 
 **Interfaces:** `evaluate_workflow(cases,runner,*,output_dir,configuration)->dict`；runner(question,history,category) 返回实际事件/路由/模型次数/工具名/证据与完成状态，不接收 expected_*。CLI：`evaluate_workflow.py --cases PATH --output-dir PATH [--limit N]`；`demo_workflow.py --base-url URL --scenario policy|logistics|complaint|chitchat|multi_step|unknown [--confirm-ticket]`。
 
