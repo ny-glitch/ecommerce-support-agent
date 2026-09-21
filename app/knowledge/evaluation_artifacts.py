@@ -4,12 +4,11 @@ from collections import defaultdict
 from datetime import UTC, datetime
 import hashlib
 import json
-import os
 from pathlib import Path
-import tempfile
 import time
 from typing import Any
 
+from app.evaluation_io import atomic_json as _atomic_json, atomic_text as _atomic_text
 from app.config import Settings
 from app.knowledge.calibration import CalibrationArtifact, RuntimeProvenance
 from app.knowledge.contracts import QueryPlan
@@ -580,27 +579,6 @@ def _canonical_json(value: Any) -> str:
         sort_keys=True,
         separators=(",", ":"),
     )
-
-
-def _atomic_json(path: Path, value: Any) -> None:
-    _atomic_text(path, strict_json_dumps(value, indent=2) + "\n")
-
-
-def _atomic_text(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(content)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    except BaseException:
-        try:
-            os.unlink(temporary)
-        except FileNotFoundError:
-            pass
-        raise
 
 
 def _read_json(path: Path) -> dict[str, Any]:

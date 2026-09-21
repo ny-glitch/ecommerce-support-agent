@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.evaluation_io import strict_json_dumps
+
 import asyncio
 from contextlib import aclosing
 from dataclasses import dataclass
@@ -97,16 +99,6 @@ def calibrate_threshold(
             )
             valid.append((accepted_answers, threshold))
     return max(valid, key=lambda item: (item[0], item[1]))[1] if valid else all_refuse
-
-
-def strict_json_dumps(value: Any, *, indent: int | None = None) -> str:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        allow_nan=False,
-        separators=None if indent is not None else (",", ":"),
-        indent=indent,
-    )
 
 
 class _NormalizationGatewayObserver:

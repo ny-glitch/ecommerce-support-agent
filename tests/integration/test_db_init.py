@@ -15,6 +15,7 @@ TABLE_NAMES = (
     "knowledge_chunks",
     "qa_extraction_staging",
     "low_confidence_questions",
+    "conversation_actions",
 )
 
 
@@ -47,7 +48,7 @@ async def test_seed_is_idempotent_in_real_mysql(mysql_db) -> None:
 
     assert set(tables) == set(TABLE_NAMES)
     assert all(count > 0 for count in before[:4])
-    assert before[4:] == (0, 0, 0)
+    assert before[4:] == (0, 0, 0, 0)
     assert after == before
 
 
@@ -144,6 +145,7 @@ async def test_mysql_rejects_invalid_role_and_unknown_conversation(mysql_db) -> 
                 Message(
                     conversation_id=conversation_id,
                     turn_id="bad-role-turn",
+                    event_key="user",
                     role="invalid",
                     content="invalid",
                     turn_status="failed",
@@ -156,6 +158,7 @@ async def test_mysql_rejects_invalid_role_and_unknown_conversation(mysql_db) -> 
                 Message(
                     conversation_id=str(uuid4()),
                     turn_id="missing-conversation-turn",
+                    event_key="user",
                     role="user",
                     content="找不到会话",
                     turn_status="completed",
@@ -204,6 +207,7 @@ async def test_json_tool_calls_and_chinese_round_trip(mysql_db) -> None:
             Message(
                 conversation_id=conversation_id,
                 turn_id="中文工具轮次",
+                event_key="call:0",
                 role="assistant",
                 content="我来为您创建售后工单。",
                 tool_calls=tool_calls,

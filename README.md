@@ -194,3 +194,55 @@ docker compose --profile test up -d --wait test-db
 | 502 | `STRUCTURED_OUTPUT_ERROR` | 售后提取结果未通过 JSON/Pydantic 校验 |
 
 单条 `message` 或 `description` 最多 32,000 个字符。上下文预算包含系统提示、五个工具 schema、完整历史轮次、本轮工具调用及结果。`estimated_input_tokens` 基于 UTF-8 字节数保守估算，并非供应商计费 tokenizer 的精确值；应用还为输出和安全余量预留空间。
+
+## 第 5 章 Workflow 评估与交付
+
+第 5 章默认后端使用固定 Workflow：一次分类、知识检索/三级分档/证据闸、只读业务 Agent、独立人工建议与工单确认。第 5 章仍处于本地验证阶段，**真实 DeepSeek 数据发送许可、真实质量评估、浏览器验收和服务切换尚未完成**。旧 8001 保留；临时验收使用 8002，不占用其他项目的 8000。
+
+本地帮助不读取模型配置或发请求：
+
+```bash
+.venv/bin/python scripts/evaluate_workflow.py --help
+.venv/bin/python scripts/demo_workflow.py --help
+```
+
+以下评估命令会把演示问题、完成历史、候选知识及必要工具上下文发送到 `.env` 配置的模型端点；须先取得对应数据发送许可。计划批准本身不代表该许可。
+
+```bash
+.venv/bin/python scripts/evaluate_workflow.py --cases evals/ch05/intents.jsonl --output-dir evals/reports/ch05/intents
+.venv/bin/python scripts/evaluate_workflow.py --cases evals/ch05/evidence.jsonl --output-dir evals/reports/ch05/evidence
+.venv/bin/python scripts/evaluate_workflow.py --scope assessor --cases evals/ch05/evidence_adversarial.jsonl --output-dir evals/reports/ch05/assessor
+# 仅冒烟，产物必须标 smoke，不能代替全量：
+.venv/bin/python scripts/evaluate_workflow.py --cases evals/ch05/intents.jsonl --output-dir evals/reports/ch05/intents-smoke --limit 1
+```
+
+Workflow scope 只给 runner 传 `question/history/category`，复用实际检索、重排和图；35 条意图与 12 条证据真值只用于评分。审计、动作建议、问题池都写到评估隔离适配器及报告，不写演示会话表、不建工单、不连接 checkpoint 库；这些结果不能代替两库持久化验收。Assessor scope 只给同一 `WorkflowGateway.assess` 传两条独立 fixture 的 question/intent/sources；其受控 score 只是 DTO 字段，不统计真实检索、路由或档位。
+
+每个输出目录包含 `manifest.json`、`results.jsonl`、`report.md` 与原子逐条缓存 `.results/`。指纹覆盖实际输入/真值、有效配置、0.7/0.8 阈值、Prompt、代码、依赖和知识/模型身份；不同配置或 invalid 目录不能续跑。已保存的失败不自动重试；重测使用新目录。`complete` 只表示全部计划样本执行完毕，准确率、误路由、支持/拒答/引用失败仍须查看具体失败行；`smoke/partial/incomplete/invalid` 都不能宣布正式评估完成。失败保留在分母内；实际分数分档；缺失 token 用量保留 null，预算预留量不是供应商计费 token。
+
+在独立 8002 上完成真实后端与数据准备、且有发送许可之后运行全部演示：
+
+```bash
+.venv/bin/python scripts/demo_workflow.py --base-url http://127.0.0.1:8002 --scenario policy
+.venv/bin/python scripts/demo_workflow.py --base-url http://127.0.0.1:8002 --scenario logistics
+.venv/bin/python scripts/demo_workflow.py --base-url http://127.0.0.1:8002 --scenario complaint
+.venv/bin/python scripts/demo_workflow.py --base-url http://127.0.0.1:8002 --scenario complaint --confirm-ticket
+.venv/bin/python scripts/demo_workflow.py --base-url http://127.0.0.1:8002 --scenario chitchat
+.venv/bin/python scripts/demo_workflow.py --base-url http://127.0.0.1:8002 --scenario multi_step
+.venv/bin/python scripts/demo_workflow.py --base-url http://127.0.0.1:8002 --scenario unknown
+```
+
+脚本要求实际 SSE `done`；HTTP 200、部分文本或 EOF 都不算成功。来源从真实 source ID/hash 构造同源固定路径并校验响应，不访问模型提供的任意 URL，不跟随重定向。投诉默认只展示建议；只有 `--confirm-ticket` 才对当前真实 action 发两次空 JSON `{}`，校验相同工单编号。业务工具仍返回原有随机演示数据；多步演示可能合理提前结束，需如实记录并另选可继续查询的真实结果，不改造返回数据。
+
+最终本地检查命令：
+
+```bash
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 .venv/bin/python -m pytest --require-mysql --require-postgres --require-milvus --require-local-models -q --tb=line
+.venv/bin/python -m pip check
+```
+
+发布前还须逐项保存真实日志、MySQL/PG 行与浏览器证据：政策检索/档位/证据闸和可点击原文；物流直达业务 Agent；投诉两个按钮独立、仅转人工不建单、都不点可继续；闲聊只分类一次；订单后物流多步；无证据固定拒答/入池/建议；重复确认及刷新/进程重启仍只有一单。第 4 章真实校准与比较门槛、整分支后端独立评审也须通过。所有门槛通过才排空临时 8002、核对并停止旧 8001、迁移演示库并启动新单 worker 8001，再验健康和实际聊天；不承诺零停机，不在旧写入者仍运行时执行新增 NOT NULL 字段迁移。第 5 章集成方式须另行选择。
+
+评估说明与人工标注复核见 [dev-notes/ch05-evaluation.md](dev-notes/ch05-evaluation.md)，阶段证据见 [dev-notes/ch05.md](dev-notes/ch05.md)。真实报告预定为 `evals/reports/ch05/{intents,evidence,assessor}/report.md`；目前尚未生成，不能引用 fixture 统计替代真实质量。
+
+2026-09-21 本地验证记录：新增评估/演示及第 4 章评估回归 69 passed；完整 required suite 在真实隔离依赖下为 782 passed、4 个遗留 schema fixture 失败、1 条既有 Starlette warning，随后只修两个旧测试文件并用真实 MySQL 复跑 10 passed，覆盖全部四个失败。该组合覆盖本次收集的 786 项；没有把它写成第二次全量全绿。`pip check` 通过，wheel 含 11 份 Prompt，新模块导入无网络连接。这些是本地代码/依赖证据，真实模型质量仍待授权与实际运行。

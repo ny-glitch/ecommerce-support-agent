@@ -20,6 +20,8 @@ EXPECTED_COLUMNS = {
         "content",
         "tool_calls",
         "tool_call_id",
+        "event_key",
+        "event_data",
         "turn_status",
         "created_at",
     },
@@ -30,6 +32,11 @@ EXPECTED_COLUMNS = {
         "ticket_type",
         "status",
         "created_at",
+    },
+    "conversation_actions": {
+        "action_id", "conversation_id", "turn_id", "action_type",
+        "issue_description", "ticket_type", "status", "ticket_no",
+        "created_at", "updated_at",
     },
     "knowledge_chunks": {
         "id",
@@ -103,7 +110,9 @@ def test_required_fields_constraints_foreign_keys_and_indexes() -> None:
     assert all(not column.nullable for column in tables["conversations"].columns)
     assert {
         column.name for column in tables["messages"].columns if column.nullable
-    } == {"tool_calls", "tool_call_id"}
+    } == {"tool_calls", "tool_call_id", "event_data"}
+    assert tables["messages"].c.event_key.nullable is False
+    assert all(not column.nullable for column in tables["conversation_actions"].columns)
     assert all(not column.nullable for column in tables["tickets"].columns)
 
     assert {
@@ -111,10 +120,11 @@ def test_required_fields_constraints_foreign_keys_and_indexes() -> None:
             (foreign_key.parent.name, foreign_key.target_fullname)
             for foreign_key in tables[table_name].foreign_keys
         }
-        for table_name in ("messages", "tickets")
+        for table_name in ("messages", "tickets", "conversation_actions")
     } == {
         "messages": {("conversation_id", "conversations.id")},
         "tickets": {("conversation_id", "conversations.id")},
+        "conversation_actions": {("conversation_id", "conversations.id")},
     }
 
     check_names = {
@@ -128,6 +138,8 @@ def test_required_fields_constraints_foreign_keys_and_indexes() -> None:
         "ck_messages_role",
         "ck_messages_turn_status",
         "ck_tickets_status",
+        "ck_actions_type",
+        "ck_actions_status",
     }
 
     message_indexes = {
@@ -137,6 +149,18 @@ def test_required_fields_constraints_foreign_keys_and_indexes() -> None:
     assert message_indexes == {
         ("conversation_id", "id"),
         ("conversation_id", "turn_id"),
+        ("conversation_id", "turn_id", "event_key"),
+    }
+    assert {
+        index.name: tuple(column.name for column in index.columns)
+        for index in tables["messages"].indexes if index.unique
+    } == {"uq_messages_event": ("conversation_id", "turn_id", "event_key")}
+    assert {
+        index.name: (tuple(column.name for column in index.columns), index.unique)
+        for index in tables["conversation_actions"].indexes
+    } == {
+        "uq_actions_turn_type": (("conversation_id", "turn_id", "action_type"), True),
+        "uq_actions_ticket_no": (("ticket_no",), True),
     }
 
 
