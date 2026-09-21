@@ -100,3 +100,65 @@ async def test_cancellation_winning_at_cleanup_completion_is_not_swallowed():
     with pytest.raises(asyncio.CancelledError):
         await waiter
     assert physical.done() and not physical.cancelled()
+
+
+async def test_service_close_settles_every_cleanup_before_shared_owners_on_failure():
+    import asyncio
+
+    from app.resource_lifecycle import close_resources
+    from app.services.workflow_chat import WorkflowChatService
+    from app.sessions import SessionGuard
+    from tests.test_workflow_graph import settings
+
+    start = asyncio.Event()
+    first_failed = asyncio.Event()
+    other_draining = asyncio.Event()
+    release_other = asyncio.Event()
+    terminal_audit = asyncio.Event()
+    original_error = RuntimeError("first cleanup failed")
+    first_task = None
+
+    async def cleanup():
+        await start.wait()
+        if asyncio.current_task() is first_task:
+            first_failed.set()
+            raise original_error
+        other_draining.set()
+        await release_other.wait()
+        terminal_audit.set()
+
+    service = WorkflowChatService(
+        settings(), object(), object(), SessionGuard(2)
+    )
+    tasks = [asyncio.create_task(cleanup()) for _ in range(2)]
+    service._cleanup_tasks.update(tasks)
+    for task in tasks:
+        task.add_done_callback(service._cleanup_tasks.discard)
+    first_task = tuple(service._cleanup_tasks)[0]
+    other_task = next(task for task in tasks if task is not first_task)
+
+    observations = []
+
+    class SharedOwner:
+        async def aclose(self):
+            observations.append((other_task.done(), terminal_audit.is_set()))
+
+    closing = asyncio.create_task(close_resources([SharedOwner(), service]))
+    await asyncio.sleep(0)
+    start.set()
+    try:
+        await first_failed.wait()
+        await other_draining.wait()
+        await asyncio.sleep(0)
+        closing.cancel()
+        closing.cancel()
+        await asyncio.sleep(0)
+        assert not closing.done()
+        assert observations == []
+    finally:
+        release_other.set()
+
+    with pytest.raises(asyncio.CancelledError) as exc_info:
+        await closing
+    assert exc_info.value.__cause__ is original_error
+    assert observations == [(True, True)]

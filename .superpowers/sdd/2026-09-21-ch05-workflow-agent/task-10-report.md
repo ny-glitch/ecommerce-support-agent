@@ -118,3 +118,51 @@ Final package checks:
 - Verified line by line: normal default is workflow-only; explicit old injections remain explicit; MySQL and checkpoint startup are check-only; no runtime evaluation file gate exists; 0.7/0.8 remain the workflow thresholds; service drains before shared owners; partial startup and repeat cancellation close once in reverse order; actions/source/extract routes are registered; package data has 11 prompts; import has no network side effect.
 - No real DeepSeek/model request was made. External data-send authorization remains pending, so this task proves the local startup/lifecycle/package contract only. It does not claim real prompt quality, real customer-service acceptance, or permission to switch 8001.
 - The known Starlette deprecation warning remains unchanged. No dependency pin was changed to suppress it.
+
+## Fix round 1 — settle all concurrent service cleanup before shared owners
+
+Review status entering the round: Spec/quality needed fixes; one Important and one pre-existing Minor. The Important showed that `WorkflowChatService.aclose` returned on the first failed cleanup task, after which `close_resources` correctly continued to close shared checkpoint/model/database owners while another service cleanup was still physically draining or writing its terminal audit.
+
+### RED and root cause
+
+Added a focused regression using the real `WorkflowChatService` and `close_resources` ownership chain. Two cleanup tasks are registered with the service's normal discard callbacks before shutdown snapshots the set. The first task in that snapshot raises a retained `RuntimeError`; the second records physical drain entry, blocks before terminal audit completion, and only completes after an explicit release. The outer close waiter is cancelled twice to preserve the existing repeated-cancellation contract.
+
+The first test attempt exposed a fixture scheduling race: the failing task could finish and be discarded before `aclose` took its snapshot, leaving its exception unobserved. The test was corrected by yielding once after starting `close_resources`, so shutdown snapshots both registered tasks before either proceeds. No product code was changed for that fixture issue.
+
+Valid RED command:
+
+```sh
+.venv/bin/python -m pytest tests/test_workflow_chat.py -k service_close_settles_every_cleanup -q --tb=short
+```
+
+Result: exit 1, `1 failed, 6 deselected`. The exact assertion was `assert not closing.done()` but the close task was already done/cancelled while the second cleanup remained blocked. This reproduces the review finding rather than a mock-only service event.
+
+### Minimal fix
+
+`WorkflowChatService.aclose` now retains the first cleanup exception while continuing to await every cleanup task in its shutdown snapshot through the existing `_settled` barrier. After every task physically settles, it propagates the retained error. If the close waiter is cancelled, cancellation remains authoritative after all cleanup; a retained cleanup error is attached as its cause. No timeout, grace period, fake success, new task owner, or other lifecycle restructuring was introduced.
+
+Focused GREEN command:
+
+```sh
+.venv/bin/python -m pytest tests/test_workflow_chat.py -k service_close_settles_every_cleanup -q --tb=short
+```
+
+Result: exit 0, `1 passed, 6 deselected in 1.01s`. The shared owner observes the second cleanup done and terminal audit set; repeated cancellation is re-raised only afterward, with the original first cleanup error still observable as the cause.
+
+### Covering verification
+
+The final scoped command covers all workflow adapter unit tests, all Task 10 startup lifecycle tests, and the two directly affected real-database cancellation/late-write guards:
+
+```sh
+.venv/bin/python -m pytest tests/test_workflow_chat.py tests/integration/test_workflow_startup.py tests/integration/test_workflow_recovery.py::test_disconnect_holds_guard_through_physical_close_and_postdrain_audit tests/integration/test_workflow_recovery.py::test_cancel_waits_for_inflight_mysql_write_before_final_audit -q --require-mysql --require-postgres --tb=short
+```
+
+Result: exit 0, `17 passed in 1.79s`, no warnings. The database tests used only isolated MySQL 13307 and PostgreSQL 15433. No external model call, running-service change, port change, or secret/DSN output occurred.
+
+### Fix-round files and self-review
+
+- Modified `app/services/workflow_chat.py`, `tests/test_workflow_chat.py`, `dev-notes/ch05.md`, and this report.
+- Re-read the complete review finding and traced the actual service cleanup task ownership through `WorkflowChatService._finish`, `WorkflowChatService.aclose`, and `close_resources` before changing code.
+- Confirmed the shutdown snapshot still prevents callback mutation from changing the tasks being awaited; the first error is deterministic in snapshot-await order and later errors cannot replace it.
+- Confirmed cancellation remains delayed until physical completion and the original cleanup error remains visible as cause. Single-turn `_finish`, guard release, terminal event ownership, shared owner reverse order, and cleanup callbacks are unchanged.
+- The controller-owned plan edit remains excluded. The pre-existing Starlette warning is deferred exactly as reviewed and did not appear in the focused fix command.

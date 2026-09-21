@@ -265,5 +265,20 @@ class WorkflowChatService:
             await self._finish(prepared, 'cancelled', 'TURN_CANCELLED')
 
     async def aclose(self):
+        first_error: Exception | None = None
+        cancellation: asyncio.CancelledError | None = None
         for task in tuple(self._cleanup_tasks):
-            await _settled(task)
+            try:
+                await _settled(task)
+            except asyncio.CancelledError as error:
+                if cancellation is None:
+                    cancellation = error
+            except Exception as error:
+                if first_error is None:
+                    first_error = error
+        if cancellation is not None:
+            if first_error is not None:
+                raise cancellation from first_error
+            raise cancellation
+        if first_error is not None:
+            raise first_error
