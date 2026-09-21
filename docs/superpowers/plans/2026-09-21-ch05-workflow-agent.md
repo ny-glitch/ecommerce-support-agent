@@ -196,7 +196,7 @@ def knowledge_band(score, *, lower=.7, upper=.8):
 - `TurnSnapshot(ref, original_question, status, final_content, event_data, messages)` 存审计恢复所需字段；`get_turn(ref,user_id) -> TurnSnapshot|None`、`unfinished_turns(conversation_id,user_id) -> list[TurnSnapshot]`。
 - `ActionRepository(sessions)` 提供 `offer_once(ref,user_id,draft:TicketInput)->ActionOffer`、`get_confirmable(conversation_id,action_id,user_id)->ActionOffer`、`mark_completed(action_id,ticket_no)->ActionOffer`。
 
-- [ ] 先用测试库旧 schema fixture 写 RED：带已有 user/assistant/tool 数据的迁移、二次迁移、两组工具往返完整历史、重复事件不插入、同键不同内容冲突；测试库清理顺序先 conversation_actions 再 tickets/messages/conversations。
+- [x] 先用测试库旧 schema fixture 写 RED：带已有 user/assistant/tool 数据的迁移、二次迁移、两组工具往返完整历史、重复事件不插入、同键不同内容冲突；测试库清理顺序先 conversation_actions 再 tickets/messages/conversations。
 
 ```python
 async def test_two_tool_steps_are_kept_in_history(repos, new_turn):
@@ -212,8 +212,8 @@ async def test_two_tool_steps_are_kept_in_history(repos, new_turn):
     assert len(history[-1].messages) == 6
 ```
 
-- [ ] Run `.venv/bin/python -m pytest tests/integration/test_workflow_migrations.py tests/integration/test_workflow_repositories.py --require-mysql -q` 并记录 RED。迁移先核对已存在字段/索引定义；MySQL DDL 非跨步骤原子事务，采用“新增可空列 → 分批按 id 回填 → 验证 → NOT NULL/唯一索引”的可续跑过程，不用 `create_all` 冒充旧表迁移。
-- [ ] event_key 固定为 user、call:0、result:0、final 等；旧行 legacy:{id}。event_data 保存来源/路由/建议和 budget 等 JSON，有限大小；新调用必须接在完整上一组结果之后，同一轮 tool_call_id 不重复；只接受匹配申请的结果。
+- [x] Run `.venv/bin/python -m pytest tests/integration/test_workflow_migrations.py tests/integration/test_workflow_repositories.py --require-mysql -q` 并记录 RED。迁移先核对已存在字段/索引定义；MySQL DDL 非跨步骤原子事务，采用“新增可空列 → 分批按 id 回填 → 验证 → NOT NULL/唯一索引”的可续跑过程，不用 `create_all` 冒充旧表迁移。
+- [x] event_key 固定为 user、call:0、result:0、final 等；旧行 legacy:{id}。event_data 保存来源/路由/建议和 budget 等 JSON，有限大小；新调用必须接在完整上一组结果之后，同一轮 tool_call_id 不重复；只接受匹配申请的结果。
 
 ```python
 existing = await session.scalar(select(Message).where(
@@ -228,9 +228,9 @@ if existing is not None:
 ```
 
 `same_event(existing: Message,candidate:dict)->bool` 在仓储内定义，比较 role/content/tool_calls/tool_call_id/event_data，使用 Python 精确比较避免 MySQL 宽松 collation；唯一键竞态后用新短事务读取并核对。
-- [ ] conversation_actions 使用规格字段、外键/唯一索引；action_id 使用服务端稳定 UUID5（conversation_id+turn_id+create_ticket），ticket_no 为 TK-加 UUID hex；校验原 TicketInput。get_confirmable 校验用户归属与轮次 completed；closed 会话不能新执行，但已完成建议可查询原结果。行锁只用于短事务，不能跨工具执行。
-- [ ] TicketRepository.create_once 保持原 ticket 幂等核对，移除新建/重试时自动改 human_pending 的行为。明确更新旧测试的预期，同时验证历史 human_pending 不被清空。
-- [ ] GREEN 测试包括两个同时 offer、唯一键冲突、新 session 恢复提交确认丢失、非法跨会话/未完成建议拒绝；迁移前后消息条数/正文与现有 ticket 数保持。提交并即时记账。
+- [x] conversation_actions 使用规格字段、外键/唯一索引；action_id 使用服务端稳定 UUID5（conversation_id+turn_id+create_ticket），ticket_no 为 TK-加 UUID hex；校验原 TicketInput。get_confirmable 校验用户归属与轮次 completed；closed 会话不能新执行，但已完成建议可查询原结果。行锁只用于短事务，不能跨工具执行。
+- [x] TicketRepository.create_once 保持原 ticket 幂等核对，移除新建/重试时自动改 human_pending 的行为。明确更新旧测试的预期，同时验证历史 human_pending 不被清空。
+- [x] GREEN 测试包括两个同时 offer、唯一键冲突、新 session 恢复提交确认丢失、非法跨会话/未完成建议拒绝；迁移前后消息条数/正文与现有 ticket 数保持。提交并即时记账。
 
 ### Task 4: 一次意图识别与 Agent 控制协议
 
