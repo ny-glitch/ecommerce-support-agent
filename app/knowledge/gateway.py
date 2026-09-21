@@ -78,7 +78,14 @@ class FaithfulnessRequestError(RuntimeError):
 
 
 class FaithfulnessResponseError(ValueError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        diagnostic_raw_response: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.diagnostic_raw_response = diagnostic_raw_response
 
 
 class KnowledgeGateway:
@@ -269,9 +276,12 @@ class KnowledgeGateway:
         except Exception as exc:
             raise FaithfulnessRequestError("faithfulness request failed") from exc
 
+        diagnostic_raw_response: str | None = None
         try:
             raw = result["raw"]
             content = raw.content
+            if isinstance(content, str):
+                diagnostic_raw_response = content
             finish_reason = raw.response_metadata.get("finish_reason")
             parsed = result["parsed"]
             if (
@@ -302,7 +312,8 @@ class KnowledgeGateway:
             return validated
         except (KeyError, TypeError, ValueError, json.JSONDecodeError, ValidationError) as exc:
             raise FaithfulnessResponseError(
-                "invalid structured faithfulness response"
+                "invalid structured faithfulness response",
+                diagnostic_raw_response=diagnostic_raw_response,
             ) from exc
 
 

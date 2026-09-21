@@ -263,6 +263,24 @@ async def test_judge_rejects_invalid_schema_or_support_ids(raw: str) -> None:
         await client.aclose()
 
 
+async def test_judge_validation_error_retains_raw_structured_diagnostic() -> None:
+    raw = (
+        '{"claims":[{"statement":"x","supported":true,'
+        '"source_ids":[999999],"reason":"bad id"}]}'
+    )
+    gateway, client = _judge_gateway(
+        lambda _request: httpx.Response(200, json=_completion(raw))
+    )
+    try:
+        with pytest.raises(FaithfulnessResponseError) as exc_info:
+            await gateway.judge("问题", "答案", (_source(),))
+    finally:
+        await client.aclose()
+
+    assert exc_info.value.diagnostic_raw_response == raw
+    assert raw not in str(exc_info.value)
+
+
 async def test_judge_separates_transport_failure_from_invalid_response() -> None:
     gateway, client = _judge_gateway(
         lambda _request: httpx.Response(503, json={"private": "do not expose"})
@@ -274,6 +292,7 @@ async def test_judge_separates_transport_failure_from_invalid_response() -> None
         await client.aclose()
 
     assert "private" not in str(exc_info.value)
+    assert getattr(exc_info.value, "diagnostic_raw_response", None) is None
 
 
 class _NormalizationGateway:
@@ -528,6 +547,143 @@ async def test_retrieval_failure_counts_zero_and_keeps_other_strategy_results() 
     assert bm25["answered"] is True
 
 
+async def test_invalid_generation_keeps_diagnostic_output_without_counting_answer() -> None:
+    class InvalidCitationGateway:
+        async def stream(self, messages):
+            yield "C65-Pro 支持 PD 3.0。[99]"
+
+    knowledge = _EvaluationGateway()
+    _, results = await evaluate_cases(
+        [_answerable_case()],
+        strategies=("bm25",),
+        calibration_threshold=0.5,
+        dependencies=EvaluationDependencies(
+            settings=_settings(),
+            knowledge_gateway=knowledge,
+            retriever=_EvaluationRetriever(),
+            model_gateway=InvalidCitationGateway(),
+        ),
+    )
+
+    result = results[0]
+    assert result["error"] == {
+        "stage": "generation",
+        "error_code": "invalid_result",
+    }
+    assert result["generation_diagnostic_output"] == "C65-Pro 支持 PD 3.0。[99]"
+    assert result["answer"] is None
+    assert result["answered"] is False
+    assert knowledge.judge_calls == []
+
+
+async def test_invalid_judge_keeps_valid_answer_and_raw_diagnostic_without_score() -> None:
+    raw = '{"claims":[{"statement":"x","supported":true,"source_ids":[9]}]}'
+
+    class InvalidJudgeGateway(_EvaluationGateway):
+        async def judge(self, question, answer, sources):
+            raise FaithfulnessResponseError(
+                "invalid structured faithfulness response",
+                diagnostic_raw_response=raw,
+            )
+
+    _, results = await evaluate_cases(
+        [_answerable_case()],
+        strategies=("bm25",),
+        calibration_threshold=0.5,
+        dependencies=EvaluationDependencies(
+            settings=_settings(),
+            knowledge_gateway=InvalidJudgeGateway(),
+            retriever=_EvaluationRetriever(),
+            model_gateway=_GenerationGateway(),
+        ),
+    )
+
+    result = results[0]
+    assert result["error"] == {
+        "stage": "judge",
+        "error_code": "invalid_response",
+    }
+    assert result["answered"] is True
+    assert result["answer"] == "C65-Pro 支持 PD 3.0。[1]"
+    assert result["judge_raw_response"] == raw
+    assert result["claims"] == []
+    assert result["faithfulness"] is None
+
+
+async def test_generation_deadline_closes_stream_and_keeps_partial_output() -> None:
+    class SlowGenerationGateway:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def stream(self, messages):
+            try:
+                yield "C65-Pro 支持"
+                await asyncio.sleep(0.15)
+                yield " PD 3.0。[1]"
+            finally:
+                self.closed = True
+
+    generation = SlowGenerationGateway()
+    knowledge = _EvaluationGateway()
+    settings = _settings().model_copy(
+        update={"knowledge_request_timeout_seconds": 0.05}
+    )
+    _, results = await evaluate_cases(
+        [_answerable_case()],
+        strategies=("bm25",),
+        calibration_threshold=0.5,
+        dependencies=EvaluationDependencies(
+            settings=settings,
+            knowledge_gateway=knowledge,
+            retriever=_EvaluationRetriever(),
+            model_gateway=generation,
+        ),
+    )
+
+    result = results[0]
+    assert result["error"] == {"stage": "generation", "error_code": "timeout"}
+    assert result["generation_diagnostic_output"] == "C65-Pro 支持"
+    assert result["answered"] is False
+    assert result["answer"] is None
+    assert generation.closed is True
+    assert knowledge.judge_calls == []
+
+
+async def test_judge_uses_remaining_deadline_and_keeps_valid_generation() -> None:
+    class SlowJudgeGateway(_EvaluationGateway):
+        def __init__(self) -> None:
+            super().__init__()
+            self.judge_started = 0
+
+        async def judge(self, question, answer, sources):
+            self.judge_started += 1
+            await asyncio.sleep(0.15)
+            return await super().judge(question, answer, sources)
+
+    knowledge = SlowJudgeGateway()
+    settings = _settings().model_copy(
+        update={"knowledge_request_timeout_seconds": 0.05}
+    )
+    _, results = await evaluate_cases(
+        [_answerable_case()],
+        strategies=("bm25",),
+        calibration_threshold=0.5,
+        dependencies=EvaluationDependencies(
+            settings=settings,
+            knowledge_gateway=knowledge,
+            retriever=_EvaluationRetriever(),
+            model_gateway=_GenerationGateway(),
+        ),
+    )
+
+    result = results[0]
+    assert knowledge.judge_started == 1
+    assert result["error"] == {"stage": "judge", "error_code": "timeout"}
+    assert result["answered"] is True
+    assert result["answer"] == "C65-Pro 支持 PD 3.0。[1]"
+    assert result["faithfulness"] is None
+
+
 async def test_execute_run_writes_atomic_resume_artifacts_and_reuses_cache(tmp_path) -> None:
     output_dir = tmp_path / "run"
     configuration = {
@@ -594,6 +750,56 @@ async def test_execute_run_writes_atomic_resume_artifacts_and_reuses_cache(tmp_p
             output_dir=output_dir,
             configuration={**configuration, "cases_sha256": "c" * 64},
         )
+
+
+async def test_invalidated_run_is_terminal_and_preserves_measurement_evidence(
+    tmp_path,
+) -> None:
+    output_dir = tmp_path / "run"
+    configuration = {
+        "schema_version": 1,
+        "mode": "compare",
+        "strategies": ["bm25"],
+        "corpus_fingerprint": "a" * 64,
+        "cases_sha256": "b" * 64,
+    }
+    knowledge = _EvaluationGateway()
+    dependencies = EvaluationDependencies(
+        settings=_settings(),
+        knowledge_gateway=knowledge,
+        retriever=_EvaluationRetriever(),
+        model_gateway=_GenerationGateway(),
+    )
+    await execute_run(
+        [_answerable_case()],
+        strategies=("bm25",),
+        calibration_threshold=0.5,
+        dependencies=dependencies,
+        output_dir=output_dir,
+        configuration=configuration,
+    )
+    original_results = (output_dir / "results.jsonl").read_text(encoding="utf-8")
+    invalidate_run(output_dir, "corpus_changed_during_run")
+
+    with pytest.raises(
+        EvaluationDataError,
+        match="invalid runs require a fresh output directory",
+    ):
+        await execute_run(
+            [_answerable_case()],
+            strategies=("bm25",),
+            calibration_threshold=0.5,
+            dependencies=dependencies,
+            output_dir=output_dir,
+            configuration=configuration,
+        )
+
+    assert len(knowledge.calls) == 1
+    assert (output_dir / "results.jsonl").read_text(encoding="utf-8") == original_results
+    assert json.loads((output_dir / "manifest.json").read_text())["status"] == "invalid"
+    assert "INVALID: corpus_changed_during_run" in (
+        output_dir / "report.md"
+    ).read_text(encoding="utf-8")
 
 
 def test_summary_uses_full_denominators_and_keeps_failures_separate() -> None:
@@ -787,6 +993,84 @@ def test_safe_run_configuration_is_an_explicit_secret_free_allowlist() -> None:
     assert "api_key" not in serialized
     assert "database" not in serialized
     assert "base_url" not in serialized
+
+
+async def test_resume_rejects_changed_effective_llm_request_controls(tmp_path) -> None:
+    provenance = RuntimeProvenance(
+        corpus_fingerprint="a" * 64,
+        embedding_model="BAAI/bge-m3",
+        embedding_revision="b" * 40,
+        reranker_model="BAAI/bge-reranker-v2-m3",
+        reranker_revision="c" * 40,
+        model_manifest_sha256="d" * 64,
+        prompt_bundle_sha256="e" * 64,
+    )
+    disabled = _settings().model_copy(
+        update={"llm_chat_extra_body": {"thinking": {"type": "disabled"}}}
+    )
+    enabled = _settings().model_copy(
+        update={"llm_chat_extra_body": {"thinking": {"type": "enabled"}}}
+    )
+    different_endpoint = _settings().model_copy(
+        update={"llm_base_url": "https://alternate.example/v1"}
+    )
+
+    def configuration(settings: Settings) -> dict[str, Any]:
+        return safe_run_configuration(
+            mode="compare",
+            strategies=("bm25",),
+            cases_sha256="f" * 64,
+            provenance=provenance,
+            settings=settings,
+            judge_prompt_sha256="1" * 64,
+            calibration_sha256="2" * 64,
+            threshold=0.8,
+            limit=None,
+            code_commit="a1b6956",
+            dependency_versions={"langchain-openai": "1.6.2"},
+        )
+
+    first_configuration = configuration(disabled)
+    changed_configuration = configuration(enabled)
+    assert first_configuration["llm_chat_extra_body_sha256"] != (
+        changed_configuration["llm_chat_extra_body_sha256"]
+    )
+    assert first_configuration["llm_endpoint_sha256"] == (
+        changed_configuration["llm_endpoint_sha256"]
+    )
+    assert first_configuration["llm_endpoint_sha256"] != (
+        configuration(different_endpoint)["llm_endpoint_sha256"]
+    )
+    assert first_configuration["llm_token_limit_param"] == "max_completion_tokens"
+    assert first_configuration["llm_request_timeout_seconds"] == 60
+    serialized = json.dumps(first_configuration)
+    assert "upstream.example" not in serialized
+    assert "thinking" not in serialized
+
+    output_dir = tmp_path / "run"
+    dependencies = EvaluationDependencies(
+        settings=disabled,
+        knowledge_gateway=_EvaluationGateway(),
+        retriever=_EvaluationRetriever(),
+        model_gateway=_GenerationGateway(),
+    )
+    await execute_run(
+        [_answerable_case()],
+        strategies=("bm25",),
+        calibration_threshold=0.8,
+        dependencies=dependencies,
+        output_dir=output_dir,
+        configuration=first_configuration,
+    )
+    with pytest.raises(EvaluationDataError, match="configuration"):
+        await execute_run(
+            [_answerable_case()],
+            strategies=("bm25",),
+            calibration_threshold=0.8,
+            dependencies=dependencies,
+            output_dir=output_dir,
+            configuration=changed_configuration,
+        )
 
 
 def test_cli_parser_has_full_compare_defaults_and_rejects_bad_limits() -> None:

@@ -38,6 +38,10 @@ _SAFE_CONFIGURATION_FIELDS = {
     "reranker_revision",
     "llm_model",
     "llm_revision",
+    "llm_endpoint_sha256",
+    "llm_chat_extra_body_sha256",
+    "llm_token_limit_param",
+    "llm_request_timeout_seconds",
     "context_window_tokens",
     "max_output_tokens",
     "token_safety_margin",
@@ -85,6 +89,14 @@ def safe_run_configuration(
         "reranker_revision": provenance.reranker_revision,
         "llm_model": settings.llm_model,
         "llm_revision": "provider-configured-unpinned",
+        "llm_endpoint_sha256": hashlib.sha256(
+            settings.llm_base_url.encode("utf-8")
+        ).hexdigest(),
+        "llm_chat_extra_body_sha256": hashlib.sha256(
+            _canonical_json(settings.llm_chat_extra_body).encode("utf-8")
+        ).hexdigest(),
+        "llm_token_limit_param": settings.llm_token_limit_param,
+        "llm_request_timeout_seconds": settings.request_timeout_seconds,
         "context_window_tokens": settings.context_window_tokens,
         "max_output_tokens": settings.max_output_tokens,
         "token_safety_margin": settings.token_safety_margin,
@@ -132,6 +144,10 @@ class _RunArtifacts:
     def _load_manifest(self) -> dict[str, Any]:
         if self.manifest_path.exists():
             manifest = _read_json(self.manifest_path)
+            if manifest.get("status") == "invalid":
+                raise EvaluationDataError(
+                    "invalid runs require a fresh output directory"
+                )
             if manifest.get("configuration_sha256") != self.config_hash:
                 raise EvaluationDataError(
                     "run directory configuration does not match the requested run"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import aclosing
 from dataclasses import dataclass
 import json
 import logging
@@ -283,6 +284,7 @@ def _base_result(
         "refused": False,
         "reason_code": None,
         "answer": None,
+        "generation_diagnostic_output": None,
         "claims": [],
         "judge_raw_response": None,
         "faithfulness": None,
@@ -379,7 +381,13 @@ async def _evaluate_strategy(
             tool_schemas=[],
             current_tool_messages=[call, tool_message],
         )
-        parts = [part async for part in dependencies.model_gateway.stream(window.messages)]
+        parts: list[str] = []
+        upstream = dependencies.model_gateway.stream(window.messages)
+        async with asyncio.timeout_at(deadline):
+            async with aclosing(upstream) as tokens:
+                async for part in tokens:
+                    parts.append(part)
+                    result["generation_diagnostic_output"] = "".join(parts)
         answer = "".join(parts)
         if not answer.strip():
             raise ValueError("generated answer is empty")
@@ -395,14 +403,17 @@ async def _evaluate_strategy(
 
     judge_started = time.perf_counter()
     try:
-        judgement = await dependencies.knowledge_gateway.judge(
-            case["query"], answer, decision.sources
-        )
+        async with asyncio.timeout_at(deadline):
+            judgement = await dependencies.knowledge_gateway.judge(
+                case["query"], answer, decision.sources
+            )
         claims = [claim.model_dump(mode="json") for claim in judgement.claims]
         result["claims"] = claims
         result["judge_raw_response"] = judgement.raw_response
         result["faithfulness"] = faithfulness_score(claims)
     except Exception as exc:
+        if isinstance(exc, FaithfulnessResponseError):
+            result["judge_raw_response"] = exc.diagnostic_raw_response
         result["error"] = _safe_error("judge", exc)
     result["timings_ms"]["judge"] = _elapsed_ms(judge_started)
     result["timings_ms"]["total"] = _elapsed_ms(started)
