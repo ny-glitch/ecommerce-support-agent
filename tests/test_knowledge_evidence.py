@@ -323,3 +323,47 @@ async def test_assess_invalid_structured_result_is_a_controlled_service_error() 
         await client.aclose()
 
     assert exc_info.value.code == "EVIDENCE_ASSESSMENT_ERROR"
+
+
+@pytest.mark.parametrize("supporting_ids", [[999999], [910001, 910001]])
+async def test_existing_assess_reuses_support_id_validation(
+    supporting_ids: list[int],
+) -> None:
+    raw = json.dumps(
+        {
+            "sufficient": True,
+            "reason_code": "supported",
+            "reason": "无效引用",
+            "supporting_chunk_ids": supporting_ids,
+        }
+    )
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, json=_completion(raw))
+        )
+    )
+    gateway = KnowledgeGateway(
+        ChatOpenAI(
+            model="test-chat-model",
+            api_key="test-key",
+            base_url="https://upstream.example/v1",
+            max_retries=0,
+            http_async_client=client,
+        ),
+        chat_extra_body={"max_completion_tokens": 128},
+        settings=settings(),
+    )
+    sources = EvidenceBudget(settings(), [], plan().original, call()).select(
+        ranked(1), plan()
+    ).sources
+    try:
+        with pytest.raises(ServiceError) as exc_info:
+            await gateway.assess(
+                plan().original,
+                sources,
+                normalized_question=plan().normalized,
+            )
+    finally:
+        await client.aclose()
+
+    assert exc_info.value.code == "EVIDENCE_ASSESSMENT_ERROR"

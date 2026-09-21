@@ -166,6 +166,9 @@ def _source(chunk_id: int = 910001) -> Citation:
 
 def _judge_gateway(
     handler,
+    *,
+    before_request=None,
+    record_usage=None,
 ) -> tuple[KnowledgeGateway, httpx.AsyncClient]:
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     model = ChatOpenAI(
@@ -183,6 +186,8 @@ def _judge_gateway(
                 "max_completion_tokens": 128,
             },
             settings=_settings(),
+            before_request=before_request,
+            record_usage=record_usage,
         ),
         client,
     )
@@ -190,6 +195,8 @@ def _judge_gateway(
 
 async def test_judge_preserves_raw_response_and_validates_supported_sources() -> None:
     requests: list[dict[str, Any]] = []
+    hooks: list[tuple[str, int, int]] = []
+    usages: list[tuple[str, dict[str, int] | None]] = []
     raw = json.dumps(
         {
             "claims": [
@@ -215,7 +222,13 @@ async def test_judge_preserves_raw_response_and_validates_supported_sources() ->
         requests.append(json.loads(request.content))
         return httpx.Response(200, json=_completion(raw))
 
-    gateway, client = _judge_gateway(handler)
+    gateway, client = _judge_gateway(
+        handler,
+        before_request=lambda stage, messages, schemas: hooks.append(
+            (stage, len(messages), len(schemas))
+        ),
+        record_usage=lambda stage, usage: usages.append((stage, usage)),
+    )
     try:
         judgement = await gateway.judge(
             "C65-Pro 支持哪些协议？",
@@ -240,6 +253,13 @@ async def test_judge_preserves_raw_response_and_validates_supported_sources() ->
     judge_input = json.loads(body["messages"][1]["content"])
     assert set(judge_input) == {"question", "answer", "sources"}
     assert judge_input["sources"][0]["chunk_id"] == 910001
+    assert hooks == [("judge", 2, 0)]
+    assert usages == [
+        (
+            "judge",
+            {"input_tokens": 20, "output_tokens": 5, "total_tokens": 25},
+        )
+    ]
 
 
 @pytest.mark.parametrize(

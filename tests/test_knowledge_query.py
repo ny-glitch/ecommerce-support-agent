@@ -59,6 +59,8 @@ def _gateway(
     handler: Callable[[httpx.Request], httpx.Response],
     *,
     settings: Settings | None = None,
+    before_request=None,
+    record_usage=None,
 ) -> tuple[KnowledgeGateway, httpx.AsyncClient]:
     if settings is None:
         settings = Settings(
@@ -86,6 +88,8 @@ def _gateway(
                 "max_completion_tokens": 128,
             },
             settings=settings,
+            before_request=before_request,
+            record_usage=record_usage,
         ),
         client,
     )
@@ -246,6 +250,21 @@ async def test_prepare_records_distinct_fallback_reasons(
     assert records[0].fallback_reason == expected_reason
 
 
+async def test_prepare_propagates_turn_budget_exhaustion() -> None:
+    failure = ServiceError(
+        "TURN_BUDGET_EXHAUSTED", "本轮模型预算已用尽", 429
+    )
+
+    with pytest.raises(ServiceError) as exc_info:
+        await QueryNormalizer(StubGateway(failure)).prepare(
+            "充电器保修多久？",
+            None,
+            deadline=time.monotonic() + 1,
+        )
+
+    assert exc_info.value is failure
+
+
 async def test_gateway_binds_protected_transport_controls_and_sends_no_history() -> None:
     requests: list[dict[str, Any]] = []
 
@@ -277,6 +296,71 @@ async def test_gateway_binds_protected_transport_controls_and_sends_no_history()
     assert "tools" not in body
     assert [message["role"] for message in body["messages"]] == ["system", "user"]
     assert body["messages"][1]["content"] == "C65-Pro 能用 PD 3.0 不？"
+
+
+async def test_gateway_calls_budget_before_transport_and_records_safe_usage() -> None:
+    events: list[object] = []
+
+    def before_request(stage, messages, tool_schemas) -> None:
+        events.append(("before", stage, messages[-1].content, tool_schemas))
+
+    def record_usage(stage, usage) -> None:
+        events.append(("usage", stage, usage))
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        events.append("transport")
+        return httpx.Response(
+            200,
+            json=_completion(
+                '{"normalized":"C65-Pro 支持 PD 3.0 吗？","synonyms":[]}'
+            ),
+        )
+
+    gateway, client = _gateway(
+        handler,
+        before_request=before_request,
+        record_usage=record_usage,
+    )
+    try:
+        await gateway.normalize("C65-Pro 能用 PD 3.0 不？")
+    finally:
+        await client.aclose()
+
+    assert events[0] == (
+        "before",
+        "normalize",
+        "C65-Pro 能用 PD 3.0 不？",
+        [],
+    )
+    assert events[1] == "transport"
+    assert events[2] == (
+        "usage",
+        "normalize",
+        {"input_tokens": 20, "output_tokens": 5, "total_tokens": 25},
+    )
+
+
+async def test_gateway_budget_rejection_prevents_normalization_transport() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(500)
+
+    def reject(_stage, _messages, _schemas) -> None:
+        raise ServiceError(
+            "TURN_BUDGET_EXHAUSTED", "本轮模型预算已用尽", 429
+        )
+
+    gateway, client = _gateway(handler, before_request=reject)
+    try:
+        with pytest.raises(ServiceError) as exc_info:
+            await gateway.normalize("C65-Pro 能用 PD 3.0 不？")
+    finally:
+        await client.aclose()
+
+    assert exc_info.value.code == "TURN_BUDGET_EXHAUSTED"
+    assert requests == []
 
 
 async def test_gateway_rejects_incomplete_raw_json_even_when_shape_is_valid() -> None:

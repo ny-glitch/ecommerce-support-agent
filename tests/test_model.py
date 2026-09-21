@@ -232,6 +232,71 @@ async def test_knowledge_gateway_reuses_owned_chat_model_and_protected_body(
     }
 
 
+async def test_workflow_gateway_reuses_owned_chat_model_hooks_and_protected_body(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings
+) -> None:
+    captured = {}
+    before_request = object()
+    record_usage = object()
+
+    class WorkflowGateway:
+        def __init__(self, model, gateway_settings, **kwargs):
+            captured.update(model=model, settings=gateway_settings, **kwargs)
+
+    monkeypatch.setattr(model_module, "WorkflowGateway", WorkflowGateway)
+    gateway, _client = make_gateway(
+        monkeypatch,
+        settings,
+        lambda _request: httpx.Response(500),
+    )
+
+    try:
+        workflow = gateway.create_workflow_gateway(before_request, record_usage)
+    finally:
+        await gateway.aclose()
+
+    assert isinstance(workflow, WorkflowGateway)
+    assert captured["settings"] is settings
+    assert captured["model"] is gateway._model
+    assert captured["before_request"] is before_request
+    assert captured["record_usage"] is record_usage
+    assert captured["chat_extra_body"] == {
+        "max_completion_tokens": 512,
+        "thinking": {"type": "disabled"},
+    }
+
+
+async def test_knowledge_factory_forwards_optional_request_hooks(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings
+) -> None:
+    captured = {}
+    before_request = object()
+    record_usage = object()
+
+    class KnowledgeGateway:
+        def __init__(self, model, **kwargs):
+            captured.update(model=model, **kwargs)
+
+    monkeypatch.setattr(model_module, "KnowledgeGateway", KnowledgeGateway)
+    gateway, _client = make_gateway(
+        monkeypatch,
+        settings,
+        lambda _request: httpx.Response(500),
+    )
+
+    try:
+        knowledge = gateway.create_knowledge_gateway(
+            before_request=before_request,
+            record_usage=record_usage,
+        )
+    finally:
+        await gateway.aclose()
+
+    assert isinstance(knowledge, KnowledgeGateway)
+    assert captured["before_request"] is before_request
+    assert captured["record_usage"] is record_usage
+
+
 @pytest.mark.parametrize("token_field", ["max_tokens", "max_completion_tokens"])
 async def test_extract_uses_chat_completions_json_mode_and_selected_token_field(
     monkeypatch: pytest.MonkeyPatch, settings: Settings, token_field: str

@@ -129,6 +129,8 @@ class QueryNormalizer:
                     "normalization synonym added protected query terms"
                 )
         except Exception as exc:
+            if isinstance(exc, ServiceError) and exc.code == "TURN_BUDGET_EXHAUSTED":
+                raise
             logger.info(
                 "query normalization fallback",
                 extra={"fallback_reason": _fallback_reason(exc)},

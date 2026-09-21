@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, Annotated
 
@@ -36,6 +37,30 @@ _Synonym = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=32),
 ]
+BeforeRequest = Callable[[str, list[BaseMessage], list[dict]], None]
+RecordUsage = Callable[[str, dict[str, int] | None], None]
+
+
+def _noop_before_request(
+    _stage: str, _messages: list[BaseMessage], _tool_schemas: list[dict]
+) -> None:
+    return None
+
+
+def _noop_record_usage(_stage: str, _usage: dict[str, int] | None) -> None:
+    return None
+
+
+def _usage_counts(message: BaseMessage) -> dict[str, int] | None:
+    metadata = getattr(message, "usage_metadata", None)
+    if not isinstance(metadata, dict):
+        return None
+    safe: dict[str, int] = {}
+    for key in ("input_tokens", "output_tokens", "total_tokens"):
+        value = metadata.get(key)
+        if type(value) is int and value >= 0:
+            safe[key] = value
+    return safe or None
 
 
 class NormalizationOutput(BaseModel):
@@ -88,6 +113,25 @@ class FaithfulnessResponseError(ValueError):
         self.diagnostic_raw_response = diagnostic_raw_response
 
 
+def validate_assessment(
+    value: EvidenceAssessment,
+    sources: Sequence[Citation],
+) -> EvidenceAssessment:
+    """Validate the assessment's semantic relationship to supplied evidence."""
+    source_ids = value.supporting_chunk_ids
+    available_ids = {source.chunk_id for source in sources}
+    if len(source_ids) != len(set(source_ids)):
+        raise ValueError("assessment supporting chunk IDs must be unique")
+    if value.sufficient:
+        if value.reason_code != "supported":
+            raise ValueError("sufficient assessment must be supported")
+        if not source_ids or not set(source_ids).issubset(available_ids):
+            raise ValueError("sufficient assessment has invalid supporting IDs")
+    elif value.reason_code == "supported" or source_ids:
+        raise ValueError("insufficient assessment cannot name supporting evidence")
+    return value
+
+
 class KnowledgeGateway:
     def __init__(
         self,
@@ -95,6 +139,8 @@ class KnowledgeGateway:
         *,
         chat_extra_body: dict[str, Any],
         settings: Settings,
+        before_request: BeforeRequest | None = None,
+        record_usage: RecordUsage | None = None,
     ) -> None:
         template = PromptTemplate.from_template(_PROMPT_PATH.read_text(encoding="utf-8"))
         self._system_prompt = template.format(
@@ -138,6 +184,8 @@ class KnowledgeGateway:
             extra_body=dict(chat_extra_body),
         )
         self._settings = settings
+        self._before_request = before_request or _noop_before_request
+        self._record_usage = record_usage or _noop_record_usage
 
     async def normalize(self, question: str) -> NormalizationOutput:
         messages = build_context(
@@ -146,6 +194,7 @@ class KnowledgeGateway:
             question,
             self._settings,
         ).messages
+        self._before_request("normalize", messages, [])
         try:
             result = await self._normalizer.ainvoke(messages)
         except (
@@ -157,6 +206,9 @@ class KnowledgeGateway:
             ) from exc
         except Exception as exc:
             raise NormalizationRequestError("normalization request failed") from exc
+        raw = result.get("raw") if isinstance(result, dict) else None
+        if isinstance(raw, BaseMessage):
+            self._record_usage("normalize", _usage_counts(raw))
         try:
             raw = result["raw"]
             content = raw.content
@@ -196,6 +248,7 @@ class KnowledgeGateway:
             settings=self._settings,
             system_prompt=self._assessment_prompt,
         )
+        self._before_request("evidence", messages, [])
         try:
             result = await self._assessor.ainvoke(messages)
         except (
@@ -216,6 +269,10 @@ class KnowledgeGateway:
                 502,
             ) from exc
 
+        raw = result.get("raw") if isinstance(result, dict) else None
+        if isinstance(raw, BaseMessage):
+            self._record_usage("evidence", _usage_counts(raw))
+
         try:
             raw = result["raw"]
             content = raw.content
@@ -235,7 +292,7 @@ class KnowledgeGateway:
             validated = EvidenceAssessment.model_validate(decoded)
             if validated != parsed:
                 raise ValueError("parsed assessment does not match raw JSON")
-            return validated
+            return validate_assessment(validated, sources)
         except (KeyError, TypeError, ValueError, json.JSONDecodeError, ValidationError) as exc:
             raise ServiceError(
                 "EVIDENCE_ASSESSMENT_ERROR",
@@ -264,6 +321,7 @@ class KnowledgeGateway:
             payload,
             self._settings,
         ).messages
+        self._before_request("judge", messages, [])
         try:
             result = await self._judge.ainvoke(messages)
         except (
@@ -275,6 +333,10 @@ class KnowledgeGateway:
             ) from exc
         except Exception as exc:
             raise FaithfulnessRequestError("faithfulness request failed") from exc
+
+        raw = result.get("raw") if isinstance(result, dict) else None
+        if isinstance(raw, BaseMessage):
+            self._record_usage("judge", _usage_counts(raw))
 
         diagnostic_raw_response: str | None = None
         try:

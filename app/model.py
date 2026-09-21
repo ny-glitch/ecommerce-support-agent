@@ -16,6 +16,7 @@ from app.errors import ServiceError
 from app.knowledge.gateway import KnowledgeGateway
 from app.prompts import extraction_system_prompt
 from app.schemas import AfterSalesResult
+from app.workflow.gateway import BeforeRequest, RecordUsage, WorkflowGateway
 
 
 class ModelGateway(Protocol):
@@ -62,11 +63,31 @@ class OpenAIModelGateway:
             include_raw=True,
         )
 
-    def create_knowledge_gateway(self) -> KnowledgeGateway:
+    def create_knowledge_gateway(
+        self,
+        *,
+        before_request: BeforeRequest | None = None,
+        record_usage: RecordUsage | None = None,
+    ) -> KnowledgeGateway:
         return KnowledgeGateway(
             self._model,
             chat_extra_body=dict(self._chat_extra_body),
             settings=self._settings,
+            before_request=before_request,
+            record_usage=record_usage,
+        )
+
+    def create_workflow_gateway(
+        self,
+        before_request: BeforeRequest,
+        record_usage: RecordUsage,
+    ) -> WorkflowGateway:
+        return WorkflowGateway(
+            self._model,
+            self._settings,
+            chat_extra_body=dict(self._chat_extra_body),
+            before_request=before_request,
+            record_usage=record_usage,
         )
 
     async def select(
