@@ -342,7 +342,7 @@ def after_decision(state):
 
 实际实现使用已验证配置值而非散落常量；decision_count 达 5 不允许第 6 次请求。若无法预留下一调用预算，用固定 budget_reply；若还有最终回答预算但不能继续工具，仅允许依据已有结果收敛。固定话术不得声称查到了未执行的工具。
 - [ ] tools 节点先幂等 append_call(step)，再执行，结果 settle 后 append_result(step)，最后才发 succeeded；延续旧服务“实际完成优先于状态帧”的保证。最终流使用 runtime.operations 管理 anext/取消，不在 yield 期间悬挂 timeout/CancelScope。
-- [ ] 测试持续 token 流越过总时限会关闭、工具两次 transient 重试不重开 60 秒、第五个工具申请被拒、非法多工具调用不执行、失败结果可正常回灌、超预算零额外上游调用、最终引用失败不给成功状态。保留已经流出的部分 answer 供失败审计，不计 completed。
+- [ ] 测试持续 token 流越过总时限会关闭、工具两次 transient 重试不重开 60 秒、第五个工具申请被拒、非法多工具调用不执行、失败结果可正常回灌、超预算零额外上游调用、最终引用失败不给成功状态。保留已经流出的部分 answer 供失败审计，不计 completed。 技术/协议/引用异常继续抛出，节点不得发 error 或以失败 State 正常走入 persist；Task 9 适配器在转发每个合法 token 前累计部分正文，异常/取消后按该正文审计，不依赖失败节点写入 checkpoint。Task 6 测试收集异常前实际 token 序列证明交接。
 - [ ] GREEN 加现有 `test_tool_executor.py/test_tools.py/test_tool_context.py`；记录调用次数/取消测试及提交。
 
 ### Task 7: 外层固定 Workflow 图与状态事件
@@ -446,7 +446,7 @@ async for part in graph.astream(prepared.initial_state, config=config,
 snapshot = await graph.aget_state(config)
 ```
 
-`checked_chat_event(value:dict)->ChatEvent` 在 workflow_chat.py 定义，只接受规格事件；拒绝节点伪造 done/error/actions。确认 graph next 为空、状态 completed、MySQL 同轮 completed 且最终内容/元数据一致，才发 actions（如有）和 done。实现该检查为 `verify_completed_turn(snapshot,turn_snapshot)->dict`，返回已经验证的 done payload。
+`checked_chat_event(value:dict)->ChatEvent` 在 workflow_chat.py 定义，只接受规格事件；拒绝节点伪造 done/error/actions。 适配器在每个 token 转发前累计本轮部分正文，固定 message/refusal 按完整正文保存；图抛错或取消时，在真实 drain 后用已观察正文结束 failed/cancelled 审计，不依赖失败节点 checkpoint，也不从模型原始对象取推理内容。确认 graph next 为空、状态 completed、MySQL 同轮 completed 且最终内容/元数据一致，才发 actions（如有）和 done。实现该检查为 `verify_completed_turn(snapshot,turn_snapshot)->dict`，返回已经验证的 done payload。
 - [ ] 在最终 token 后注入 PG commit 失败，确保没有 done/可用 actions；断连中关闭模型流、等待在途写入、只记一次 failed/cancelled。必要清理按既有有限宽限完成，不能用释放 guard 伪装已排空。
 - [ ] 真实两库集成验证重建 service 后续聊、两个线程隔离、恢复重复执行幂等；验证旧 SSE、非法请求、上下文预算回归；提交并记账。
 
