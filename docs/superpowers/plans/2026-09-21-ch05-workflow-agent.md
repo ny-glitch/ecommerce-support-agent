@@ -46,6 +46,10 @@
 
 2026-09-21 已先查 Context7，再核对官方发布页：候选固定版本为 LangGraph 1.2.11、langgraph-checkpoint-postgres 3.1.2、psycopg[binary,pool] 3.3.6、PostgreSQL 17.11。现环境尚未安装前三者；这些是 Task 1 的兼容性验证输入，不是安装成功声明。依赖解析或镜像架构失败必须报告，不自行更换固定栈。
 
+执行裁决：Task 1 dry-run 发现 LangGraph SDK 0.4.4 要求 `websockets>=14,<17`。应用/测试未使用 WebSocket，已安装相关默认依赖允许兼容版本；允许把这个既有传递 pin 从 17.1 改为 16.1.1，其余旧 pin 保持。必须更新 lock、明确记录变动，并在安装后执行 pip check 及完整本地回归，不称“全部依赖未变”。
+
+部署裁决：现有 8001 的旧 ORM 不写 event_key，提前迁移演示库的 NOT NULL 列会破坏预览。Task 3 先只迁移隔离测试库；Task 10/12 的 8002 验收使用独立初始化的数据，正式演示库迁移在最终排空旧服务后的切换窗口进行，切换后再验实际聊天及库状态。不改变最终 schema，也不承诺零停机。
+
 依赖顺序：`0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12`。按任务依次实现；配置、脚手架和文档随相关功能提交。每个后端任务有自身 RED/GREEN 和验收点；是否逐任务独立评审由用户选择的执行方式决定。
 
 ## 文件责任与接口总表
@@ -129,7 +133,7 @@ async def test_open_never_creates_schema(monkeypatch, checkpoint_settings):
 .venv/bin/python -m pip install --dry-run 'langgraph==1.2.11' 'langgraph-checkpoint-postgres==3.1.2' 'psycopg[binary,pool]==3.3.6' 'langchain-core==1.6.3' 'langchain-openai==1.6.2'
 ```
 
-- [ ] Context7 + 安装源码确认 `AsyncPostgresSaver.from_conn_string`、`setup`、`aget_tuple`、关闭语义；采用异步上下文管理器由 store 持有。初始化脚本调用 setup，普通启动调用 check；空测试 thread_id 的 `aget_tuple` 用于只读探测表可用性。
+- [ ] Context7 + 安装源码确认 `AsyncPostgresSaver.from_conn_string`、`setup`、`aget_tuple`、关闭语义；采用异步上下文管理器由 store 持有。本任务初始化脚本调用 setup，并交付可独立测试的 check 方法；普通应用启动的 open/check 调用由 Task 10 的生产装配接入，其缺表启动失败测试为最终门槛。空测试 thread_id 的 `aget_tuple` 用于只读探测表可用性。
 
 ```python
 manager = AsyncPostgresSaver.from_conn_string(url)
