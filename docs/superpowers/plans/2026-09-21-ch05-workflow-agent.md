@@ -314,7 +314,7 @@ def knowledge_target(intent, band, sufficient):
 
 ### Task 6: 有界 ReAct Agent 子图
 
-**Files:** Create `app/workflow/agent.py`、`tests/test_workflow_agent.py`、`tests/ch05_helpers.py`；Modify `app/tools/business.py`（只新增原工具的白名单组装函数）、`app/workflow/state.py`。
+**Files:** Create `app/workflow/agent.py`、`tests/test_workflow_agent.py`、`tests/ch05_helpers.py`；Modify `app/tools/business.py`（只新增原工具的白名单组装函数）、`app/workflow/state.py`、`app/knowledge/evidence.py`、`tests/test_knowledge_evidence.py`（共享引用校验允许明确的无来源/无需引用模式，但仍拒绝任何不存在的引用；默认保留原强制引用合同）。
 
 **Interfaces:** `build_readonly_registry(context:ToolContext,faq,tickets)->ToolRegistry` 只筛选既有三个查询工具。`AgentDependencies(settings,gateway_factory,conversations,faq,tickets,executor)`；`build_agent_graph(deps)->CompiledStateGraph` 使用 WorkflowState 和 TurnRuntime context，compile() 不建立独立跨轮记忆。输入 agent_mode=tools/generate_only，输出 answer/used_citations/suggestions、工具与预算轨迹；不输出 done、不建工单。
 
