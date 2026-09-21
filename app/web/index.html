@@ -9,10 +9,10 @@
     :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; color: #242738; background: #f8f9fc; --accent: #525fe8; --muted: #858999; --line: #e9ebf2; }
     * { box-sizing: border-box; }
     body { margin: 0; }
-    button, textarea { font: inherit; }
+    button, textarea, select { font: inherit; }
     button { cursor: pointer; }
     button:disabled { cursor: default; opacity: .5; }
-    button:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 3px solid #b2baff; outline-offset: 3px; }
+    button:focus-visible, textarea:focus-visible, select:focus-visible, a:focus-visible, summary:focus-visible { outline: 3px solid #b2baff; outline-offset: 3px; }
     button { transition: background .15s, border-color .15s; }
     [hidden] { display: none !important; }
     .app { display: grid; grid-template-columns: 226px minmax(0, 1fr); height: 100dvh; min-height: 440px; }
@@ -67,6 +67,30 @@
     .user .bubble { padding: 12px 18px; background: #edf0ff; border: 1px solid #e5e9fd; border-radius: 14px 14px 4px 14px; }
     .pending .bubble { color: #949ab0; }
     .incomplete { display: block; color: #a77542; font-size: 11px; margin-top: 10px; }
+    .retrieval-status { color: #8189ad; font-size: 12px; line-height: 1.7; margin-bottom: 10px; }
+    .refusal-label { display: inline-block; color: #947344; background: #faf5e9; border: 1px solid #eee4ce; padding: 3px 9px; border-radius: 6px; font-size: 11px; margin-bottom: 9px; }
+    .citation { display: inline; vertical-align: baseline; padding: 0 3px; margin: 0 1px; border: 0; border-radius: 4px; background: #edf0ff; color: #4858cf; font-size: 12px; font-weight: 600; line-height: 1.6; }
+    .citation:hover { background: #dfe5ff; }
+    .feedback { display: flex; align-items: center; gap: 5px; margin-top: 14px; color: #999fb1; font-size: 11px; }
+    .feedback button { border: 1px solid transparent; background: transparent; border-radius: 6px; min-width: 31px; min-height: 30px; padding: 4px 7px; font-size: 14px; filter: grayscale(1); opacity: .65; }
+    .feedback button:hover:not(:disabled) { background: #eceffa; opacity: 1; }
+    .feedback button.selected { background: #e8edff; border-color: #cbd5ff; filter: none; opacity: 1; }
+    .feedback button:disabled:not(.selected) { opacity: .25; }
+    .feedback span { margin-left: 6px; }
+    .category-row { max-width: 760px; margin: 0 auto 10px; display: flex; gap: 10px; align-items: center; }
+    .category-row label { margin: 0; font-size: 11px; font-weight: 400; color: #8a91a5; white-space: nowrap; }
+    .category-row select { min-width: 0; max-width: 280px; padding: 6px 26px 6px 10px; border: 1px solid #e2e5f0; border-radius: 7px; color: #656d87; background: white; font-size: 12px; }
+    .source-dialog { width: min(640px, calc(100vw - 32px)); max-height: 82dvh; padding: 0; border: 1px solid #e3e7f4; border-radius: 16px; color: #343d55; box-shadow: 0 24px 90px #17234630; }
+    .source-dialog::backdrop { background: #1b254b55; backdrop-filter: blur(3px); }
+    .source-head { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 20px 24px; border-bottom: 1px solid var(--line); }
+    .source-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
+    .source-close { border: 0; color: #788198; background: #f1f3f9; border-radius: 7px; font-size: 19px; width: 30px; height: 30px; }
+    .source-content { padding: 22px 24px 26px; overflow-wrap: anywhere; }
+    .source-path { font-size: 12px; color: #7682a0; line-height: 1.9; margin: 0 0 20px; }
+    .source-question { font-size: 15px; font-weight: 600; line-height: 1.8; white-space: pre-wrap; margin: 0 0 14px; }
+    .source-answer { font-size: 14px; line-height: 1.95; white-space: pre-wrap; margin: 0; }
+    .source-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 11px; color: #929bae; }
+    .source-footer a { color: #5365cc; text-decoration: none; }
     .compose-area { padding: 12px 30px 20px; flex-shrink: 0; }
     .composer { max-width: 760px; margin: 0 auto; background: white; border: 1px solid #dde1ee; border-radius: 15px; padding: 14px 16px 11px; box-shadow: 0 5px 22px #2e387008; }
     .composer:focus-within { border-color: #a4adf4; box-shadow: 0 0 0 3px #525fe808; }
@@ -150,6 +174,7 @@
           <div class="messages" id="messages" role="log" aria-label="对话记录" aria-live="polite" aria-relevant="additions text"></div>
         </div>
         <div class="compose-area">
+          <div class="category-row" id="category-row" hidden><label for="category">本轮查询品类</label><select id="category"><option value="">全部品类</option></select></div>
           <form class="composer" id="chat-form">
             <textarea id="chat-input" rows="2" maxlength="32000" aria-label="输入消息" placeholder="描述你的问题，我来帮你梳理…"></textarea>
             <div class="compose-bottom"><span class="hint" id="chat-status" role="status">Enter 发送 · Shift + Enter 换行</span><button type="submit" class="primary" id="send" disabled><span>发送</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 7-7 7 7M12 5v14"/></svg></button><button type="button" class="primary" id="stop" hidden>停止回复</button></div>
@@ -176,6 +201,10 @@
       </section>
     </main>
   </div>
+  <dialog id="source-dialog" class="source-dialog" aria-labelledby="source-title">
+    <div class="source-head"><h2 id="source-title">引用原文</h2><button type="button" class="source-close" id="source-close" aria-label="关闭引用原文">×</button></div>
+    <div class="source-content"><p class="source-path" id="source-path"></p><p class="source-question" id="source-question"></p><p class="source-answer" id="source-answer"></p><div class="source-footer"><span>本轮回答使用的原文快照</span><a id="source-link" target="_blank" rel="noopener noreferrer" hidden>打开来源 ↗</a></div></div>
+  </dialog>
   <script>
     'use strict';
     const $ = id => document.getElementById(id);
@@ -187,6 +216,7 @@
       $('extract-send').disabled = busy || !$('extract-input').value.trim();
       $('new-chat').disabled = busy;
       $('fill-example').disabled = busy;
+      $('category').disabled = busy;
       document.querySelectorAll('[data-view], [data-prompt]').forEach(button => { button.disabled = busy; });
     }
     function showView(view) {
@@ -206,8 +236,92 @@
       const toolTray = document.createElement('div'); toolTray.className = 'tool-tray'; toolTray.hidden = true; toolTray.setAttribute('aria-label', '工具调用');
       bubble.append(toolTray, textNode);
       body.append(name, bubble); row.append(avatar, body); $('messages').append(row); scrollDown();
-      return { row, body, bubble: textNode, toolTray, toolBadges: new Map() };
+      const retrieval = document.createElement('div'); retrieval.className = 'retrieval-status'; retrieval.hidden = true; retrieval.setAttribute('role', 'status');
+      body.insertBefore(retrieval, bubble);
+      return { row, body, bubble: textNode, toolTray, retrieval, toolBadges: new Map(), sources: new Map(), sessionId: null, turnId: null, refused: false };
     }
+    function openSource(source) {
+      $('source-title').textContent = `引用 [${source.number}]`;
+      $('source-path').textContent = source.section_path || source.category || '知识库原文';
+      $('source-question').textContent = source.questions;
+      $('source-answer').textContent = source.answer;
+      const link = $('source-link'); link.hidden = true; link.removeAttribute('href');
+      try {
+        const url = new URL(source.url, location.origin);
+        if (url.origin === location.origin && /^\/api\/knowledge\/chunks\/[1-9]\d*$/.test(url.pathname)
+            && /^[a-f0-9]{64}$/.test(source.content_hash) && url.searchParams.get('expected_hash') === source.content_hash
+            && [...url.searchParams.keys()].every(key => key === 'expected_hash') && !url.hash) {
+          link.href = url.href; link.hidden = false;
+        }
+      } catch (_) { /* The saved snapshot remains available without a valid source URL. */ }
+      $('source-dialog').showModal();
+    }
+    function acceptSources(reply, data) {
+      if (!Array.isArray(data.sources)) return;
+      const sources = new Map();
+      for (const source of data.sources) {
+        if (!source || !Number.isInteger(source.number) || source.number < 1 || source.number > 10
+            || sources.has(source.number) || typeof source.questions !== 'string' || typeof source.answer !== 'string') continue;
+        sources.set(source.number, source);
+      }
+      reply.sources = sources;
+    }
+    function renderAnswer(reply, answer) {
+      const nodes = document.createDocumentFragment(); let start = 0;
+      for (const match of answer.matchAll(/\[(\d+)\]/g)) {
+        const source = reply.sources.get(Number(match[1]));
+        if (!source) continue;
+        nodes.append(document.createTextNode(answer.slice(start, match.index)));
+        const button = document.createElement('button'); button.type = 'button'; button.className = 'citation'; button.textContent = match[0];
+        button.setAttribute('aria-label', `查看引用 ${source.number}：${source.section_path || source.category || '知识库原文'}`);
+        button.addEventListener('click', () => openSource(source)); nodes.append(button); start = match.index + match[0].length;
+      }
+      nodes.append(document.createTextNode(answer.slice(start))); reply.bubble.replaceChildren(nodes);
+    }
+    function updateRetrieval(reply, data) {
+      const stages = { normalizing: '正在理解你的问题…', retrieving: '正在查找相关知识…', reranking: '正在筛选最相关的资料…', checking_evidence: '正在核对回答依据…' };
+      if (!Object.hasOwn(stages, data.stage)) return;
+      reply.retrieval.textContent = stages[data.stage]; reply.retrieval.hidden = false; scrollDown();
+    }
+    function addFeedback(reply) {
+      if (!reply.sessionId || !reply.turnId) return;
+      const key = `ch04-feedback:${reply.sessionId}:${reply.turnId}`;
+      const tray = document.createElement('div'); tray.className = 'feedback'; tray.setAttribute('aria-label', '回答满意度');
+      const message = document.createElement('span'); message.setAttribute('role', 'status');
+      let locked = false;
+      const buttons = ['up', 'down'].map(choice => {
+        const button = document.createElement('button'); button.type = 'button'; button.textContent = choice === 'up' ? '👍' : '👎';
+        button.setAttribute('aria-label', choice === 'up' ? '这条回答有帮助' : '这条回答没有帮助'); button.setAttribute('aria-pressed', 'false');
+        button.addEventListener('click', () => {
+          if (locked) return;
+          lock(choice);
+          try { localStorage.setItem(key, JSON.stringify({ choice, timestamp: new Date().toISOString() })); } catch (_) { /* Keep this page's one-shot choice when storage is unavailable. */ }
+        });
+        tray.append(button); return button;
+      });
+      function lock(choice) {
+        locked = true; buttons.forEach((button, index) => {
+          const selected = choice === (index === 0 ? 'up' : 'down'); button.disabled = true;
+          button.classList.toggle('selected', selected); button.setAttribute('aria-pressed', String(selected));
+        }); message.textContent = '已反馈';
+      }
+      tray.append(message); reply.body.append(tray);
+      try { const saved = JSON.parse(localStorage.getItem(key)); if (saved && ['up', 'down'].includes(saved.choice)) lock(saved.choice); } catch (_) { /* A malformed local record does not prevent feedback. */ }
+    }
+    async function loadCategories() {
+      try {
+        const response = await fetch('/api/knowledge/categories'); if (!response.ok) return;
+        const data = await response.json(), categories = Array.isArray(data) ? data : data.categories;
+        if (!Array.isArray(categories)) return;
+        for (const category of new Set(categories)) {
+          if (typeof category !== 'string' || !category.trim()) continue;
+          const option = document.createElement('option'); option.value = category; option.textContent = category; $('category').append(option);
+        }
+        $('category-row').hidden = false;
+      } catch (_) { /* Existing chat stays available while the knowledge API is unavailable. */ }
+    }
+    $('source-close').addEventListener('click', () => $('source-dialog').close());
+    $('source-dialog').addEventListener('click', event => { if (event.target === $('source-dialog')) { const rect = event.target.getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) event.target.close(); } });
     function updateTool(reply, data) {
       const states = { running: '执行中', retrying: '正在重试', succeeded: '已完成', not_found: '未匹配', failed: '执行失败' };
       if (typeof data.tool_call_id !== 'string' || !data.tool_call_id || typeof data.name !== 'string' || !Object.hasOwn(states, data.status)) return;
@@ -238,7 +352,7 @@
       }
       return response;
     }
-    async function consumeChat(response, onText, onTool) {
+    async function consumeChat(response, handlers) {
       if (!response.headers.get('content-type')?.includes('text/event-stream') || !response.body) throw new Error('服务没有返回有效的对话流。');
       const reader = response.body.getReader(), decoder = new TextDecoder();
       let buffer = '', metaId = null, completed = false;
@@ -250,13 +364,18 @@
         }
         if (!data.length) return;
         const value = JSON.parse(data.join('\n'));
+        if (completed) throw new Error('对话结束后的消息异常，请重试。');
         if (event === 'error') throw new Error(value.message || '回复未完成，请重试。');
         if (event === 'meta') {
           if (typeof value.session_id !== 'string' || (sessionId && value.session_id !== sessionId)) throw new Error('对话会话信息异常，请开始新对话。');
           metaId = value.session_id; sessionId = metaId;
+          handlers.meta(value);
         }
-        if (event === 'token' && typeof value.content === 'string') onText(value.content);
-        if (event === 'tool_status') onTool(value);
+        if (event === 'token' && typeof value.content === 'string') handlers.text(value.content);
+        if (event === 'tool_status') handlers.tool(value);
+        if (event === 'retrieval_status') handlers.retrieval(value);
+        if (event === 'sources') handlers.sources(value);
+        if (event === 'refusal') handlers.refusal(value);
         if (event === 'done') {
           if (!metaId || value.session_id !== metaId) throw new Error('对话结束信息异常，请开始新对话。');
           completed = true;
@@ -287,13 +406,28 @@
       let answer = '';
       try {
         const payload = { message }; if (sessionId) payload.session_id = sessionId;
+        if ($('category').value) payload.category = $('category').value;
         const response = await post('/api/chat', payload, controller.signal);
-        await consumeChat(response, text => { answer += text; reply.bubble.textContent = answer; reply.row.classList.remove('pending'); scrollDown(); }, data => updateTool(reply, data));
+        await consumeChat(response, {
+          meta: data => { reply.sessionId = data.session_id; reply.turnId = typeof data.turn_id === 'string' ? data.turn_id : null; },
+          text: text => { answer += text; renderAnswer(reply, answer); reply.row.classList.remove('pending'); reply.retrieval.hidden = true; scrollDown(); },
+          tool: data => updateTool(reply, data),
+          retrieval: data => updateRetrieval(reply, data),
+          sources: data => { acceptSources(reply, data); if (answer) renderAnswer(reply, answer); },
+          refusal: data => {
+            if (typeof data.content !== 'string' || !data.content.trim() || answer) throw new Error('回复内容异常，请重试。');
+            answer = data.content; reply.refused = true; reply.retrieval.hidden = true; reply.row.classList.remove('pending');
+            const label = document.createElement('div'); label.className = 'refusal-label'; label.textContent = '需要更多信息'; reply.body.insertBefore(label, reply.bubble.parentElement);
+            renderAnswer(reply, answer); scrollDown();
+          },
+        });
         if (!answer) throw new Error('模型没有返回正文，请重试。');
+        renderAnswer(reply, answer); addFeedback(reply);
       } catch (error) {
         const stopped = controller.signal.aborted;
         controller.abort();
         interruptTools(reply);
+        reply.retrieval.hidden = true;
         reply.bubble.textContent = answer || (stopped ? '已停止回复。' : '暂时未能完成回复。');
         const note = document.createElement('span'); note.className = 'incomplete'; note.textContent = '本轮未记入后续对话'; reply.body.append(note);
         if (!stopped) notice(error instanceof TypeError ? '连接失败，请确认本地服务正在运行。' : error.message);
@@ -311,6 +445,7 @@
     document.querySelectorAll('[data-prompt]').forEach(button => button.addEventListener('click', () => { $('chat-input').value = button.dataset.prompt; controls(); $('chat-input').focus(); }));
     $('new-chat').addEventListener('click', () => {
       sessionId = null; expired = false; $('messages').replaceChildren(); $('welcome').hidden = false;
+      $('category').value = ''; $('source-dialog').close();
       $('chat-input').value = ''; $('chat-input').style.height = ''; showView('chat'); controls(); $('chat-input').focus();
     });
     $('extract-input').addEventListener('input', controls);
@@ -327,6 +462,7 @@
       } catch (error) { notice(error instanceof TypeError ? '连接失败，请确认本地服务正在运行。' : error.message); }
       finally { busy = false; $('extract-send').textContent = '提取信息'; controls(); }
     });
+    loadCategories();
   </script>
 </body>
 </html>
