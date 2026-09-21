@@ -274,7 +274,7 @@ return FinalControl.model_validate_json(str(reply.content))
 
 ### Task 5: 固定检索、三级分档与独立证据闸
 
-**Files:** Create `app/workflow/knowledge.py`、`tests/test_workflow_knowledge.py`、`evals/ch05/evidence.jsonl`；Modify `app/knowledge/evidence.py`、`app/knowledge/pipeline.py`（共享选择协议）、`app/workflow/contracts.py`、`app/workflow/prompts.py`、`tests/test_knowledge_evidence.py`、`app/config.py`、`.env.example`、`tests/test_config_context.py`（补齐规格§5.1 的阈值环境配置与验证）。
+**Files:** Create `app/workflow/knowledge.py`、`tests/test_workflow_knowledge.py`、`evals/ch05/evidence.jsonl`、`evals/ch05/evidence_adversarial.jsonl`；Modify `app/knowledge/evidence.py`、`app/knowledge/pipeline.py`（共享选择协议）、`app/workflow/contracts.py`、`tests/test_knowledge_evidence.py`、`app/config.py`、`.env.example`、`tests/test_config_context.py`（补齐规格§5.1 的阈值环境配置与验证）。
 
 **Interfaces:**
 - `EvidenceSelector(fits)` 提供 `select(ranked:tuple[RankedChunk,...],query:QueryPlan)->EvidencePlan`；原 EvidenceBudget 与新的 `WorkflowEvidenceBudget(settings,history,question,intent,tool_schemas)` 共用选择/编号/edge_order，不再为 Workflow 造 AIMessage 工具申请。
@@ -308,7 +308,8 @@ def knowledge_target(intent, band, sufficient):
 
 - [ ] KnowledgeStage 只运行一次 normalize/retrieve(hybrid_rerank)，取有效 ranked 的最高分；没有候选不伪造分数。复用 `decide_evidence(..., threshold=None)` 与公共充分性校验，用一个绑定当前 IntentResult 的 assessor 适配新 workflow evidence Prompt；低分仍进入自评，真实技术异常向外传播。
 - [ ] 高档模板按 supporting_chunk_ids 选择实际来源，固定格式为 `来源章节路径 + 完整 answer + [number]`；多条逐块展示，无新生成调用。模型生成需验证 ASCII `[n]`，拒绝把 `[１]`、`[١]` 视为合法链接；修正公共 citation 校验并测试旧合同，不能仅修改前端正则掩盖后端问题。
-- [ ] 准备 12 条证据标注：expected_sufficient、supporting_chunk_ids、needs_business_data、reason；不伪标真实分数。至少含型号错配、无答案、政策条件不足、跨块支持、低相关但事实完整、资料伪指令；标注不送入待评模型 Prompt。记录真实评估 pending。
+- [ ] `evals/ch05/evidence.jsonl` 的 12 条正式标注必须以现有 `data/knowledge/ch04/chunks.json` 权威语料为依据，支持 ID 使用实际 chunk ID；含 question/history/category、expected_sufficient、supporting_chunk_ids、needs_business_data、reason，题意和预期在完整现有语料下成立，不以未传入图的人工候选控制预期。保留型号错配、无答案、政策条件不足、跨块支持、口语低词面相关但事实完整等覆盖，不伪标真实分数；Task 12 仍用真实图和真实重排结果。
+- [ ] 现有语料不含的资料伪指令与相互冲突，另存 `evals/ch05/evidence_adversarial.jsonl` 两条受控证据自评样例，明确 `evaluation_scope=assessor_fixture`；来源是此测试的显式输入，支持/原因标签只在判分侧。它们仅验证相同 Workflow evidence Prompt/assess 协议，不计入端到端图的召回、路由、真实分档或引用定位成绩。逐条人工核对两份标注与来源；正式 12 条加 corpus ID/正文对应验证，受控两条加结构与标签隔离验证。真实评估均 pending。
 - [ ] GREEN 加原 `test_knowledge_evidence.py/test_knowledge_pipeline.py/test_knowledge_query.py`；确认没有修改 corpus 与原评估四策略定义。记录并提交。
 
 ### Task 6: 有界 ReAct Agent 子图
@@ -498,6 +499,8 @@ handoffButton.addEventListener('click', () => {
 **Files:** Create `app/workflow/evaluation.py`、`app/evaluation_io.py`、`scripts/evaluate_workflow.py`、`scripts/demo_workflow.py`、`tests/test_workflow_evaluation.py`、`tests/test_workflow_demo.py`；Modify `app/knowledge/evaluation.py`、`app/knowledge/evaluation_artifacts.py`（仅通用文件 I/O 提取）、`evals/ch05/intents.jsonl`、`evals/ch05/evidence.jsonl`、`dev-notes/ch05-evaluation.md`、`dev-notes/ch05.md`、`README.md`。
 
 **Interfaces:** `evaluate_workflow(cases,runner,*,output_dir,configuration)->dict`；runner(question,history,category) 返回实际事件/路由/模型次数/工具名/证据与完成状态，不接收 expected_*。CLI：`evaluate_workflow.py --cases PATH --output-dir PATH [--limit N]`；`demo_workflow.py --base-url URL --scenario policy|logistics|complaint|chitchat|multi_step|unknown [--confirm-ticket]`。
+
+- 证据数据责任补清：正式 `evidence.jsonl` 是现有语料的 12 条端到端真值，仍只把 question/history/category 交给真实图 runner。独立 `evidence_adversarial.jsonl` 两条仅测试 WorkflowGateway.assess 的伪指令/冲突边界，CLI 新增 `--scope workflow|assessor`（默认 workflow）；assessor scope runner 只接 question/intent/sources，不接 expected_* / supporting_chunk_ids / reason。复用同一 Prompt/预算/严格协议和文件 I/O，产物明确 scope，只报告充分性/支持 ID 与错误，禁止冒充真实检索、路由、分档或端到端指标。两条额外真实模型调用同样等待数据发送授权；不要改变语料或给真实图注入这些来源。
 
 - [ ] RED 评估统计 fixture：分类分母含失败、每类混淆、知识误入率、支持/拒答/引用正确性、错误码独立、score 档位按实际值；禁止标注泄漏给 runner；partial/smoke 不写 complete，配置指纹不匹配拒绝续跑。
 
