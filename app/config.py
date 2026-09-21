@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     request_timeout_seconds: PositiveInt = 60
     tool_timeout_seconds: PositiveInt = 5
     tool_max_attempts: ToolAttempts = 2
+    agent_max_tool_calls: Annotated[int, Field(ge=1, le=4)] = 4
+    agent_max_decisions: Annotated[int, Field(ge=1, le=5)] = 5
+    turn_model_budget: Annotated[int, Field(ge=1, le=49152)] = 49152
     milvus_uri: str = "http://127.0.0.1:19530"
     milvus_collection: str = "knowledge"
     milvus_token: SecretStr | None = None

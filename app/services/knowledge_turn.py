@@ -8,6 +8,7 @@ from langchain_core.messages import AIMessage
 from app.config import Settings
 from app.knowledge.contracts import KnowledgeDecision
 from app.knowledge.evidence import EvidenceBudget
+from app.services.turn_operations import bounded
 
 if TYPE_CHECKING:
     from app.services.chat import PreparedTurn
@@ -74,10 +75,7 @@ class KnowledgeTurnRunner:
                 if decision.assessment is not None
                 else decision.refusal
             )
-            # Imported lazily to keep the runner's PreparedTurn dependency acyclic.
-            from app.services.chat import _bounded
-
-            await _bounded(
+            await bounded(
                 lambda: self._low_confidence.record_once(
                     prepared.ref,
                     prepared.message,

@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
 import json
 import logging
-from typing import Literal, TypeVar
+from typing import Literal
 from uuid import uuid4
 
 from anyio import CancelScope
@@ -29,6 +29,7 @@ from app.model import ModelGateway
 from app.prompts import knowledge_answer_system_prompt, tool_chat_system_prompt
 from app.services.events import ChatEvent
 from app.services.knowledge_turn import KnowledgeTurnRunner
+from app.services.turn_operations import bounded as _bounded
 from app.sessions import SessionGuard
 from app.tools.business import ToolContext, build_registry
 from app.tools.executor import (
@@ -40,7 +41,6 @@ from app.tools.executor import (
 from app.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
-T = TypeVar("T")
 
 
 @dataclass
@@ -62,38 +62,6 @@ class PreparedTurn:
     _stream_started: bool = field(default=False, repr=False)
     _finalized: bool = field(default=False, repr=False)
     _cleanup_started: bool = field(default=False, repr=False)
-
-
-async def _bounded(
-    factory: Callable[[], Awaitable[T]], deadline: float,
-    operations: set[asyncio.Task], *, mutations: set[asyncio.Task] | None = None,
-) -> T:
-    # Each scope enters/exits in the same Task; never hold a timeout over yield.
-    if asyncio.get_running_loop().time() >= deadline:
-        raise TimeoutError
-    async def invoke() -> T:
-        return await factory()
-
-    def finished(task: asyncio.Task) -> None:
-        operations.discard(task)
-        if mutations is not None:
-            mutations.discard(task)
-        if not task.cancelled():
-            task.exception()  # Also retrieve failures after the consumer has left.
-
-    task = asyncio.create_task(invoke())
-    operations.add(task)
-    if mutations is not None:
-        mutations.add(task)
-    task.add_done_callback(finished)
-    try:
-        async with asyncio.timeout_at(deadline):
-            return await asyncio.shield(task)
-    except (asyncio.CancelledError, TimeoutError):
-        # A cancelled operation may await resource close in its finally block.
-        # Let bounded cleanup own that unwind instead of blocking this consumer.
-        task.cancel()
-        raise
 
 
 def _safe_error(error: Exception) -> ServiceError:
