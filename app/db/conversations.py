@@ -1,65 +1,84 @@
 from __future__ import annotations
 
-from typing import Literal
-
+import json
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-from sqlalchemy import select, update
+from sqlalchemy import select
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
-from app.db.contracts import StoredTurn, TurnRef
+from app.db.contracts import StoredTurn, TurnRef, TurnSnapshot
 from app.db.models import Conversation, Message
 from app.errors import ServiceError
+from app.workflow.state import validate_turn_messages
 
 
-def _conversation_not_found() -> ServiceError:
-    return ServiceError("CONVERSATION_NOT_FOUND", "会话不存在", 404)
+def _conversation_not_found():
+    return ServiceError('CONVERSATION_NOT_FOUND', '会话不存在', 404)
 
 
-def _invalid_turn(message: str) -> ServiceError:
-    return ServiceError("TURN_INVALID", message, 409)
+def _invalid_turn(message):
+    return ServiceError('TURN_INVALID', message, 409)
 
 
-def _restore_complete_turn(rows: list[Message]) -> StoredTurn | None:
-    if not rows or any(row.turn_status != "completed" for row in rows):
+def _conflict():
+    return ServiceError('EVENT_CONFLICT', '该事件与已保存内容不一致', 409)
+
+
+def same_event(existing: Message, candidate: dict) -> bool:
+    return all(getattr(existing, key) == candidate.get(key) for key in
+               ('role', 'content', 'tool_calls', 'tool_call_id', 'event_data'))
+
+
+def _messages(rows):
+    messages = []
+    for row in rows:
+        if row.role == 'user':
+            if row.tool_calls or row.tool_call_id:
+                raise ValueError('user tool fields')
+            messages.append(HumanMessage(content=row.content))
+        elif row.role == 'assistant':
+            if row.tool_calls:
+                if len(row.tool_calls) != 1 or row.tool_calls[0].get('id') != row.tool_call_id:
+                    raise ValueError('call identity')
+                messages.append(AIMessage(content=row.content, tool_calls=row.tool_calls))
+            else:
+                if row.tool_call_id:
+                    raise ValueError('orphan call identity')
+                messages.append(AIMessage(content=row.content))
+        elif row.role == 'tool':
+            if row.tool_calls or not row.tool_call_id:
+                raise ValueError('invalid tool fields')
+            messages.append(ToolMessage(content=row.content, tool_call_id=row.tool_call_id))
+        else:
+            raise ValueError('unknown role')
+    return tuple(messages)
+
+
+def _restore_complete_turn(rows):
+    if not rows or any(row.turn_status != 'completed' for row in rows):
         return None
-    if rows[0].tool_calls or rows[0].tool_call_id:
-        return None
-    roles = [row.role for row in rows]
-    if roles == ["user", "assistant"]:
-        if rows[1].tool_calls or rows[1].tool_call_id or not rows[1].content.strip():
-            return None
-        messages = (
-            HumanMessage(content=rows[0].content),
-            AIMessage(content=rows[1].content),
-        )
-    elif roles == ["user", "assistant", "tool", "assistant"]:
-        calls = rows[1].tool_calls
-        call = calls[0] if isinstance(calls, list) and len(calls) == 1 else None
-        if (
-            not isinstance(call, dict)
-            or not isinstance(call.get("name"), str)
-            or not call["name"]
-            or not isinstance(call.get("args"), dict)
-            or not isinstance(call.get("id"), str)
-            or not call["id"]
-            or call.get("type") != "tool_call"
-            or call["id"] != rows[1].tool_call_id
-            or rows[1].tool_call_id != rows[2].tool_call_id
-            or rows[2].tool_calls
-            or rows[3].tool_calls
-            or rows[3].tool_call_id
-            or not rows[3].content.strip()
-        ):
-            return None
-        messages = (
-            HumanMessage(content=rows[0].content),
-            AIMessage(content=rows[1].content, tool_calls=calls),
-            ToolMessage(content=rows[2].content, tool_call_id=rows[2].tool_call_id),
-            AIMessage(content=rows[3].content),
-        )
-    else:
+    try:
+        messages = _messages(rows)
+        validate_turn_messages(messages)
+    except (ValueError, TypeError, KeyError):
         return None
     return StoredTurn(turn_id=rows[0].turn_id, messages=messages)
+
+
+def _metadata(data):
+    if data is None:
+        return None
+    try:
+        if not isinstance(data, dict):
+            raise ValueError()
+        encoded = json.dumps(data, ensure_ascii=False, allow_nan=False)
+        if len(encoded.encode('utf-8')) > 65536:
+            raise ValueError()
+        decoded = json.loads(encoded)
+        if decoded != data:
+            raise ValueError()
+        return decoded
+    except (TypeError, ValueError, RecursionError):
+        raise _invalid_turn('事件元数据必须为有限大小的 JSON 对象') from None
 
 
 class ConversationRepository:
@@ -76,7 +95,7 @@ class ConversationRepository:
                     )
                 )
             ).scalar_one_or_none()
-            if conversation is None:
+            if conversation is None or conversation.id != conversation_id or conversation.user_id != user_id:
                 return None
             return {
                 "id": conversation.id,
@@ -85,148 +104,140 @@ class ConversationRepository:
             }
 
     async def create(self, conversation_id: str, user_id: str) -> None:
-        async with self._sessions.begin() as session:
-            session.add(
-                Conversation(id=conversation_id, user_id=user_id, status="open")
-            )
+        def verify(row):
+            if row.id != conversation_id or row.user_id != user_id:
+                raise _conflict()
+        try:
+            async with self._sessions.begin() as session:
+                row = await session.get(Conversation, conversation_id)
+                if row:
+                    verify(row)
+                else:
+                    session.add(Conversation(id=conversation_id, user_id=user_id, status='open'))
+        except DBAPIError:
+            async with self._sessions.begin() as session:
+                row = await session.get(Conversation, conversation_id)
+                if row is None:
+                    raise
+                verify(row)
+
+    async def _rows(self, session, ref):
+        return list((await session.scalars(select(Message).where(
+            Message.conversation_id == ref.conversation_id,
+            Message.turn_id == ref.turn_id).order_by(Message.id))).all())
+
+    async def _write(self, ref, key, candidate, validate, *, user_id=None, status=None):
+        def check(existing):
+            if (existing.conversation_id != ref.conversation_id or existing.turn_id != ref.turn_id
+                    or existing.event_key != key or not same_event(existing, candidate)
+                    or (status is not None and existing.turn_status != status)):
+                raise _conflict()
+        try:
+            async with self._sessions.begin() as session:
+                owner = await session.scalar(select(Conversation).where(
+                    Conversation.id == ref.conversation_id).with_for_update())
+                if owner is None or owner.id != ref.conversation_id or (user_id is not None and owner.user_id != user_id):
+                    raise _conversation_not_found()
+                rows = await self._rows(session, ref)
+                if any(row.conversation_id != ref.conversation_id or row.turn_id != ref.turn_id for row in rows):
+                    raise _conflict()
+                existing = next((r for r in rows if r.event_key == key), None)
+                if existing:
+                    check(existing)
+                    return
+                if owner.status == 'closed':
+                    raise _invalid_turn('会话已关闭')
+                validate(rows)
+                session.add(Message(conversation_id=ref.conversation_id, turn_id=ref.turn_id,
+                    event_key=key, turn_status=status or 'pending', **candidate))
+                if status:
+                    for row in rows:
+                        row.turn_status = status
+        except DBAPIError:
+            # A failed/uncertain transaction must never be reused.
+            async with self._sessions.begin() as session:
+                owner = await session.get(Conversation, ref.conversation_id)
+                if owner is None or owner.id != ref.conversation_id or (user_id is not None and owner.user_id != user_id):
+                    raise _conversation_not_found()
+                existing = await session.scalar(select(Message).where(
+                    Message.conversation_id == ref.conversation_id, Message.turn_id == ref.turn_id,
+                    Message.event_key == key))
+                if existing is None:
+                    raise
+                check(existing)
 
     async def start_turn(self, ref: TurnRef, user_id: str, content: str) -> None:
-        async with self._sessions.begin() as session:
-            conversation = (
-                await session.execute(
-                    select(Conversation).where(
-                        Conversation.id == ref.conversation_id,
-                        Conversation.user_id == user_id,
-                    )
-                )
-            ).scalar_one_or_none()
-            if conversation is None:
-                raise _conversation_not_found()
-            session.add(
-                Message(
-                    conversation_id=ref.conversation_id,
-                    turn_id=ref.turn_id,
-                    role="user",
-                    content=content,
-                    turn_status="pending",
-                )
-            )
+        def validate(rows):
+            if rows:
+                raise _invalid_turn('轮次已存在')
+        await self._write(ref, 'user', dict(role='user',content=content), validate, user_id=user_id)
 
-    async def append_call(self, ref: TurnRef, message: AIMessage) -> None:
-        if len(message.tool_calls) != 1 or not message.tool_calls[0].get("id"):
-            raise _invalid_turn("工具调用必须包含一个有效调用标识")
-        async with self._sessions.begin() as session:
-            rows = (
-                await session.execute(
-                    select(Message)
-                    .where(
-                        Message.conversation_id == ref.conversation_id,
-                        Message.turn_id == ref.turn_id,
-                    )
-                    .order_by(Message.id)
-                )
-            ).scalars().all()
-            if (
-                len(rows) != 1
-                or rows[0].role != "user"
-                or rows[0].turn_status != "pending"
-            ):
-                raise _invalid_turn("当前轮次不能追加工具调用")
-            session.add(
-                Message(
-                    conversation_id=ref.conversation_id,
-                    turn_id=ref.turn_id,
-                    role="assistant",
-                    content=message.content,
-                    tool_calls=message.tool_calls,
-                    tool_call_id=message.tool_calls[0]["id"],
-                    turn_status="pending",
-                )
-            )
+    async def append_call(self, ref: TurnRef, message: AIMessage, *, step: int = 0) -> None:
+        if type(step) is not int or step < 0 or len(message.tool_calls) != 1:
+            raise _invalid_turn('工具调用必须包含一个有效调用标识')
+        def validate(rows):
+            if len(rows) != 1 + 2 * step or any(r.turn_status != 'pending' for r in rows):
+                raise _invalid_turn('当前轮次不能追加工具调用')
+            try:
+                validate_turn_messages((*_messages(rows), message,
+                    ToolMessage(content='',tool_call_id=message.tool_calls[0]['id']), AIMessage(content='validate')))
+            except (ValueError, TypeError, KeyError):
+                raise _invalid_turn('工具调用序列无效') from None
+        await self._write(ref, f'call:{step}', dict(role='assistant', content=message.content,
+            tool_calls=message.tool_calls, tool_call_id=message.tool_calls[0].get('id')), validate)
 
-    async def append_result(self, ref: TurnRef, message: ToolMessage) -> None:
-        async with self._sessions.begin() as session:
-            rows = (
-                await session.execute(
-                    select(Message)
-                    .where(
-                        Message.conversation_id == ref.conversation_id,
-                        Message.turn_id == ref.turn_id,
-                    )
-                    .order_by(Message.id)
-                )
-            ).scalars().all()
-            if (
-                len(rows) != 2
-                or [row.role for row in rows] != ["user", "assistant"]
-                or any(row.turn_status != "pending" for row in rows)
-                or rows[1].tool_call_id != message.tool_call_id
-            ):
-                raise _invalid_turn("工具结果与当前轮次的调用不匹配")
-            session.add(
-                Message(
-                    conversation_id=ref.conversation_id,
-                    turn_id=ref.turn_id,
-                    role="tool",
-                    content=message.content,
-                    tool_call_id=message.tool_call_id,
-                    turn_status="pending",
-                )
-            )
+    async def append_result(self, ref: TurnRef, message: ToolMessage, *, step: int = 0) -> None:
+        if type(step) is not int or step < 0:
+            raise _invalid_turn('步骤无效')
+        def validate(rows):
+            if len(rows) != 2 + 2 * step or any(r.turn_status != 'pending' for r in rows):
+                raise _invalid_turn('工具结果与当前轮次的调用不匹配')
+            try:
+                validate_turn_messages((*_messages(rows), message, AIMessage(content='validate')))
+            except (ValueError, TypeError, KeyError):
+                raise _invalid_turn('工具结果与当前轮次的调用不匹配') from None
+        await self._write(ref, f'result:{step}', dict(role='tool',content=message.content,
+            tool_call_id=message.tool_call_id), validate)
 
-    async def finish_turn(
-        self,
-        ref: TurnRef,
-        content: str,
-        status: Literal["completed", "failed", "cancelled"],
-    ) -> None:
-        if status == "completed" and not content.strip():
-            raise _invalid_turn("完成的轮次必须包含最终回答")
+    async def finish_turn(self, ref: TurnRef, content: str, status: str, *, event_data: dict | None = None) -> None:
+        if status not in ('completed', 'failed', 'cancelled'):
+            raise _invalid_turn('结束状态无效')
+        data = _metadata(event_data)
+        def validate(rows):
+            if not rows or any(r.turn_status != 'pending' for r in rows):
+                raise _invalid_turn('当前轮次不能结束')
+            if status == 'completed':
+                try:
+                    validate_turn_messages((*_messages(rows), AIMessage(content=content)))
+                except (ValueError, TypeError, KeyError):
+                    raise _invalid_turn('完成的轮次包含不完整的工具调用或回答') from None
+        await self._write(ref, 'final', dict(role='assistant',content=content,event_data=data), validate, status=status)
+
+    async def get_turn(self, ref: TurnRef, user_id: str) -> TurnSnapshot | None:
         async with self._sessions.begin() as session:
-            rows = (
-                await session.execute(
-                    select(Message)
-                    .where(
-                        Message.conversation_id == ref.conversation_id,
-                        Message.turn_id == ref.turn_id,
-                    )
-                    .order_by(Message.id)
-                )
-            ).scalars().all()
-            if not rows or any(row.turn_status != "pending" for row in rows):
-                raise _invalid_turn("当前轮次不能结束")
-            roles = [row.role for row in rows]
-            valid_prefix = roles == ["user"]
-            if roles == ["user", "assistant", "tool"]:
-                calls = rows[1].tool_calls
-                valid_prefix = bool(
-                    isinstance(calls, list)
-                    and len(calls) == 1
-                    and isinstance(calls[0], dict)
-                    and calls[0].get("id")
-                    and calls[0]["id"] == rows[1].tool_call_id
-                    and rows[1].tool_call_id == rows[2].tool_call_id
-                )
-            if status == "completed" and not valid_prefix:
-                raise _invalid_turn("完成的轮次包含不完整的工具调用")
-            if content.strip():
-                session.add(
-                    Message(
-                        conversation_id=ref.conversation_id,
-                        turn_id=ref.turn_id,
-                        role="assistant",
-                        content=content,
-                        turn_status=status,
-                    )
-                )
-            await session.execute(
-                update(Message)
-                .where(
-                    Message.conversation_id == ref.conversation_id,
-                    Message.turn_id == ref.turn_id,
-                )
-                .values(turn_status=status)
-            )
+            owner = await session.get(Conversation, ref.conversation_id)
+            if owner is None or owner.id != ref.conversation_id or owner.user_id != user_id:
+                return None
+            rows = await self._rows(session, ref)
+            if not rows:
+                return None
+            if any(r.turn_id != ref.turn_id for r in rows) or len({r.turn_status for r in rows}) != 1:
+                raise _invalid_turn('审计轮次状态冲突')
+            final = rows[-1] if rows[-1].role == 'assistant' and not rows[-1].tool_calls else None
+            try:
+                messages = _messages(rows)
+            except (ValueError, TypeError, KeyError):
+                raise _invalid_turn('审计轮次结构无效') from None
+            if rows[0].turn_status == 'completed' and _restore_complete_turn(rows) is None:
+                raise _invalid_turn('审计轮次结构无效')
+            return TurnSnapshot(ref, rows[0].content, rows[0].turn_status,
+                final.content if final else None, final.event_data if final else None, messages)
+
+    async def unfinished_turns(self, conversation_id: str, user_id: str) -> list[TurnSnapshot]:
+        audit = await self.audit(conversation_id, user_id)
+        ids = dict.fromkeys(row['turn_id'] for row in audit if row['turn_status'] == 'pending')
+        snapshots = [await self.get_turn(TurnRef(conversation_id, tid), user_id) for tid in ids]
+        return [s for s in snapshots if s is not None]
 
     async def history(
         self, conversation_id: str, user_id: str, limit: int
@@ -236,13 +247,13 @@ class ConversationRepository:
                 return []
             owner = (
                 await session.execute(
-                    select(Conversation.id).where(
+                    select(Conversation).where(
                         Conversation.id == conversation_id,
                         Conversation.user_id == user_id,
                     )
                 )
             ).scalar_one_or_none()
-            if owner is None:
+            if owner is None or owner.id != conversation_id or owner.user_id != user_id:
                 return []
             rows = (
                 await session.execute(
@@ -266,13 +277,13 @@ class ConversationRepository:
         async with self._sessions.begin() as session:
             owner = (
                 await session.execute(
-                    select(Conversation.id).where(
+                    select(Conversation).where(
                         Conversation.id == conversation_id,
                         Conversation.user_id == user_id,
                     )
                 )
             ).scalar_one_or_none()
-            if owner is None:
+            if owner is None or owner.id != conversation_id or owner.user_id != user_id:
                 return []
             rows = (
                 await session.execute(

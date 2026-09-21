@@ -188,7 +188,7 @@ def knowledge_band(score, *, lower=.7, upper=.8):
 
 ### Task 3: MySQL 幂等多步流水与工单建议仓储
 
-**Files:** Create `app/db/workflow_models.py`、`app/db/workflow_migrations.py`、`app/db/actions.py`、`scripts/migrate_workflow.py`、`tests/integration/test_workflow_migrations.py`、`tests/integration/test_workflow_repositories.py`；Modify `app/db/models.py`、`app/db/database.py`、`app/db/contracts.py`、`app/db/conversations.py`、`app/db/tickets.py`、`tests/integration/conftest.py`、`tests/integration/test_repositories.py`、`tests/integration/test_tools_mysql.py`（仅被本章改变的单调用/人工作业状态断言）。
+**Files:** Create `app/db/workflow_models.py`、`app/db/workflow_migrations.py`、`app/db/actions.py`、`scripts/migrate_workflow.py`、`tests/integration/test_workflow_migrations.py`、`tests/integration/test_workflow_repositories.py`；Modify `app/db/models.py`、`app/db/database.py`、`app/db/contracts.py`、`app/db/conversations.py`、`app/db/tickets.py`、`app/db/seed.py`（既有种子消息补稳定 `legacy:{id}` event_key）、`tests/integration/conftest.py`、`tests/integration/test_repositories.py`、`tests/integration/test_tools_mysql.py`（仅被本章改变的单调用/人工作业状态断言）。
 
 **Interfaces:**
 - `async migrate_workflow(database: Database) -> dict[str,int]` 非破坏、重复可运行；check-only 不执行 ALTER。

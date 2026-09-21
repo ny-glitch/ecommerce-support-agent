@@ -53,13 +53,13 @@ async def _load_idempotency_state(
             )
         )
     ).scalar_one_or_none()
-    if conversation is None:
+    if conversation is None or conversation.id != conversation_id or conversation.user_id != user_id:
         raise _conversation_not_found()
 
     ticket = await session.get(Ticket, ticket_no)
-    if ticket is not None and not _same_ticket(
+    if ticket is not None and (ticket.ticket_no != ticket_no or not _same_ticket(
         ticket, conversation_id, issue_description, ticket_type
-    ):
+    )):
         raise _ticket_conflict()
     return conversation, ticket
 
@@ -87,7 +87,6 @@ class TicketRepository:
                     ticket_type,
                 )
                 if ticket is not None:
-                    conversation.status = "human_pending"
                     return _ticket_dto(ticket)
 
                 ticket = Ticket(
@@ -98,7 +97,6 @@ class TicketRepository:
                     status="pending",
                 )
                 session.add(ticket)
-                conversation.status = "human_pending"
                 return _ticket_dto(ticket)
         except DBAPIError:
             # A unique-key race or uncertain commit leaves the failed Session
@@ -114,5 +112,4 @@ class TicketRepository:
                 )
                 if ticket is None:
                     raise
-                conversation.status = "human_pending"
                 return _ticket_dto(ticket)

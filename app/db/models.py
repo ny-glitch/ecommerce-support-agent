@@ -68,6 +68,7 @@ class Message(Base):
             "turn_status IN ('pending', 'completed', 'failed', 'cancelled')",
             name="ck_messages_turn_status",
         ),
+        Index("uq_messages_event", "conversation_id", "turn_id", "event_key", unique=True),
         Index("ix_messages_conversation_id_id", "conversation_id", "id"),
         Index(
             "ix_messages_conversation_id_turn_id",
@@ -91,6 +92,8 @@ class Message(Base):
         nullable=True,
     )
     tool_call_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    event_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    event_data: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     turn_status: Mapped[str] = mapped_column(String(16), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

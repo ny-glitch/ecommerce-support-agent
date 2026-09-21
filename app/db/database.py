@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import NullPool
 
 from app.db.models import Base
+import app.db.workflow_models  # noqa: F401
 import app.db.knowledge_models  # noqa: F401
 
 

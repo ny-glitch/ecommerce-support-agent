@@ -34,7 +34,7 @@ async def test_query_faq_requires_the_new_knowledge_dependency(repos, new_turn) 
 async def test_create_ticket_is_idempotent_for_context_ticket_number(
     repos, new_turn
 ) -> None:
-    _, faq, tickets = repos
+    conversations, faq, tickets = repos
     ctx = ToolContext(new_turn, "demo", "收到的商品损坏了", "TK-idempotent")
     registry = build_registry(ctx, faq, tickets)
     args = {"issue_description": "收到的商品损坏了", "ticket_type": "repair"}
@@ -44,3 +44,5 @@ async def test_create_ticket_is_idempotent_for_context_ticket_number(
 
     assert json.loads(first.message.content)["data"]["ticket_no"] == "TK-idempotent"
     assert json.loads(second.message.content) == json.loads(first.message.content)
+
+    assert (await conversations.get(new_turn.conversation_id, "demo"))["status"] == "open"

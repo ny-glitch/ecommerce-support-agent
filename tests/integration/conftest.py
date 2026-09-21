@@ -155,7 +155,7 @@ async def clear_business_rows(db) -> None:
             "knowledge_chunks",
         ):
             await connection.execute(text(f"DELETE FROM {table_name}"))
-        for table_name in ("tickets", "messages", "conversations", "faq"):
+        for table_name in ("conversation_actions", "tickets", "messages", "conversations", "faq"):
             await connection.execute(text(f"DELETE FROM {table_name}"))
 
 
@@ -171,6 +171,8 @@ async def mysql_db(request: pytest.FixtureRequest) -> AsyncIterator[object]:
     try:
         await db.check()
         await db.create_schema()
+        from app.db.workflow_migrations import migrate_workflow
+        await migrate_workflow(db)
         schema_ready = True
         await clear_business_rows(db)
         yield db

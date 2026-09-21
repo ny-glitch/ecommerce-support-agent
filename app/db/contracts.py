@@ -15,3 +15,13 @@ class TurnRef:
 class StoredTurn:
     turn_id: str
     messages: tuple[BaseMessage, ...]
+
+
+@dataclass(frozen=True)
+class TurnSnapshot:
+    ref: TurnRef
+    original_question: str
+    status: str
+    final_content: str | None
+    event_data: dict | None
+    messages: tuple[BaseMessage, ...]

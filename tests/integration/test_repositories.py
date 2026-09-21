@@ -122,7 +122,7 @@ async def test_literal_faq_search_escapes_wildcards(repos) -> None:
 
 
 @pytest.mark.asyncio
-async def test_ticket_retry_returns_one_ticket_and_marks_conversation(repos, new_turn, mysql_db) -> None:
+async def test_ticket_retry_returns_one_ticket_and_preserves_conversation(repos, new_turn, mysql_db) -> None:
     _, _, tickets = repos
 
     first = await tickets.create_once(
@@ -157,7 +157,7 @@ async def test_ticket_retry_returns_one_ticket_and_marks_conversation(repos, new
 
     assert ticket_count == 1
     assert conversation is not None
-    assert conversation.status == "human_pending"
+    assert conversation.status == "open"
 
 
 @pytest.mark.asyncio
@@ -314,7 +314,7 @@ async def test_ticket_write_failure_rolls_back_conversation_status(repos, new_tu
 
 
 @pytest.mark.asyncio
-async def test_ticket_recovery_restores_conversation_status_before_success(
+async def test_ticket_recovery_preserves_conversation_status_before_success(
     new_turn, mysql_db
 ) -> None:
     from app.db.tickets import TicketRepository
@@ -345,7 +345,7 @@ async def test_ticket_recovery_restores_conversation_status_before_success(
         conversation = await session.get(Conversation, new_turn.conversation_id)
     assert result["ticket_no"] == "TICKET-RECOVER"
     assert conversation is not None
-    assert conversation.status == "human_pending"
+    assert conversation.status == "open"
 
 
 @pytest.mark.asyncio
@@ -435,6 +435,7 @@ async def test_malformed_completed_tool_group_is_audited_but_not_returned(
         session.add_all(
             [
                 Message(
+                    event_key="legacy-test:0",
                     conversation_id=new_turn.conversation_id,
                     turn_id=new_turn.turn_id,
                     role="user",
@@ -442,6 +443,7 @@ async def test_malformed_completed_tool_group_is_audited_but_not_returned(
                     turn_status="completed",
                 ),
                 Message(
+                    event_key="legacy-test:1",
                     conversation_id=new_turn.conversation_id,
                     turn_id=new_turn.turn_id,
                     role="assistant",
@@ -450,6 +452,7 @@ async def test_malformed_completed_tool_group_is_audited_but_not_returned(
                     turn_status="completed",
                 ),
                 Message(
+                    event_key="legacy-test:2",
                     conversation_id=new_turn.conversation_id,
                     turn_id=new_turn.turn_id,
                     role="assistant",
@@ -457,6 +460,7 @@ async def test_malformed_completed_tool_group_is_audited_but_not_returned(
                     turn_status="completed",
                 ),
                 Message(
+                    event_key="legacy-test:3",
                     conversation_id=new_turn.conversation_id,
                     turn_id=invalid_schema_turn_id,
                     role="user",
@@ -464,6 +468,7 @@ async def test_malformed_completed_tool_group_is_audited_but_not_returned(
                     turn_status="completed",
                 ),
                 Message(
+                    event_key="legacy-test:4",
                     conversation_id=new_turn.conversation_id,
                     turn_id=invalid_schema_turn_id,
                     role="assistant",
@@ -473,6 +478,7 @@ async def test_malformed_completed_tool_group_is_audited_but_not_returned(
                     turn_status="completed",
                 ),
                 Message(
+                    event_key="legacy-test:5",
                     conversation_id=new_turn.conversation_id,
                     turn_id=invalid_schema_turn_id,
                     role="tool",
@@ -481,6 +487,7 @@ async def test_malformed_completed_tool_group_is_audited_but_not_returned(
                     turn_status="completed",
                 ),
                 Message(
+                    event_key="legacy-test:6",
                     conversation_id=new_turn.conversation_id,
                     turn_id=invalid_schema_turn_id,
                     role="assistant",

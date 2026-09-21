@@ -49,6 +49,7 @@ async def seed_database(db: Database) -> None:
             session.add(
                 Message(
                     id=DEMO_MESSAGE_ID,
+                    event_key=f"legacy:{DEMO_MESSAGE_ID}",
                     conversation_id=DEMO_CONVERSATION_ID,
                     turn_id="demo-turn-001",
                     role="user",
