@@ -449,7 +449,7 @@ async for part in graph.astream(prepared.initial_state, config=config,
 snapshot = await graph.aget_state(config)
 ```
 
-`checked_chat_event(value:dict)->ChatEvent` 在 workflow_chat.py 定义，只接受规格事件；拒绝节点伪造 done/error/actions。 适配器在每个 token 转发前累计本轮部分正文，固定 message/refusal 按完整正文保存；图抛错或取消时，在真实 drain 后用已观察正文结束 failed/cancelled 审计，不依赖失败节点 checkpoint，也不从模型原始对象取推理内容。确认 graph next 为空、状态 completed、MySQL 同轮 completed 且最终内容/元数据一致，才发 actions（如有）和 done。实现该检查为 `verify_completed_turn(snapshot,turn_snapshot)->dict`，返回已经验证的 done payload。
+`checked_chat_event(value:dict)->ChatEvent` 在 workflow_chat.py 定义，只接受规格事件；拒绝节点伪造 done/error/actions。 适配器在每个 token 转发前累计本轮部分正文，固定 message/refusal 按完整正文保存；图抛错或取消时，在真实 drain 后用已观察正文结束 failed/cancelled 审计，不依赖失败节点 checkpoint，也不从模型原始对象取推理内容。确认 graph next 为空、状态 completed、MySQL 同轮 completed 且最终内容/元数据一致，才发 actions（如有）和 done。 actions 数据固定为 `{session_id, turn_id, actions: offers}`，其中 offers 为已核验的 Task 7 持久化建议列表；done 可携带同一 turn_id，前端在有效 done 与流结束后才启用建议，失败则移除。实现该检查为 `verify_completed_turn(snapshot,turn_snapshot)->dict`，返回已经验证的 done payload。
 - [ ] 在最终 token 后注入 PG commit 失败，确保没有 done/可用 actions；断连中关闭模型流、等待在途写入、只记一次 failed/cancelled。必要清理按既有有限宽限完成，不能用释放 guard 伪装已排空。
 - [ ] 真实两库集成验证重建 service 后续聊、两个线程隔离、恢复重复执行幂等；验证旧 SSE、非法请求、上下文预算回归；提交并记账。
 
