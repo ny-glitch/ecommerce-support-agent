@@ -533,7 +533,7 @@ source_response 在本模块定义为上述固定白名单字段字典。所有U
 
 ## Task 9：真实评估、校准阈值与分桶报告
 
-**Files:** Create `app/knowledge/evaluation.py`、`app/prompts/faithfulness_judge.txt`、`scripts/evaluate_knowledge.py`、`tests/test_knowledge_evaluation.py`、`dev-notes/ch04-evaluation.md`；Modify `app/knowledge/gateway.py`。
+**Files:** Create `app/knowledge/evaluation.py`、`app/knowledge/evaluation_artifacts.py`、`app/resource_lifecycle.py`、`app/prompts/faithfulness_judge.txt`、`scripts/evaluate_knowledge.py`、`tests/test_knowledge_evaluation.py`、`dev-notes/ch04-evaluation.md`；Modify `app/knowledge/gateway.py`、`app/main.py`、生命周期相关测试（如公共helper导入路径需同步）。
 
 **Interfaces:** `retrieval_metrics(ranked_ids:list[int],relevant_ids:set[int])->dict[str,float|None]` 返回 recall_at_5/10/50 和 mrr_at_50；空relevant返回None。`faithfulness_score(claims:list[dict])->float|None`，claim字段statement/supported/source_ids，空列表None。`calibrate_threshold(samples:list[tuple[float|None,bool]],*,max_false_accept:float=0.1)->float`，None表示没有候选，永远不算通过，不用NaN/Infinity哨兵；`KnowledgeGateway.judge(question:str,answer:str,sources:tuple[Citation,...])->FaithfulnessJudgement` 为 async，Pydantic judgement含claims列表及每条理由，技术失败单列。
 
@@ -591,7 +591,7 @@ def faithfulness_score(claims):
 
 ## Task 11：全链路验收、文档与 finish
 
-**Files:** Create `scripts/demo_knowledge.sh`；Modify `README.md`、`dev-notes/ch04.md`、`dev-notes/ch04-evaluation.md`、本计划进度。
+**Files:** Create `scripts/demo_knowledge.sh`、`tests/test_knowledge_demo.py`（受控SSE夹具验证脚本，不调用真实模型）；Modify `README.md`、`dev-notes/ch04.md`、`dev-notes/ch04-evaluation.md`、本计划进度。
 
 - [ ] **Step 1：完整真实依赖测试。** 带所有required标志运行，不将skip当通过；新测试的真实模型fixture只加载一份并使用明确的session事件循环，不在函数级测试重复下载/加载。验证旧售后提取、多轮审计、工单幂等、取消行为仍通过。
 

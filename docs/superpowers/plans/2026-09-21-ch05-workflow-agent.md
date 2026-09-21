@@ -78,14 +78,14 @@
 
 **Interfaces:** 保持 `KnowledgeGateway.assess`、`QueryNormalizer.prepare`、`KnowledgeRetriever.retrieve`、`CalibrationArtifact` 的既有公共合同；产出复审通过的具体提交和剩余真实验收清单。
 
-- [ ] 读取已有部分修改，恢复原 fix round；对照四个 Important：invalid run 不复活、有效请求控制进 fingerprint、保留失败生成/judge 诊断、生成/judge 受总 deadline 约束。
-- [ ] 运行现有失败回归，追加缺少的持续流超时用例；先记录实际 RED，不将先前 441 passed 套到当前未完成修复。
+- [x] 读取已有部分修改，恢复原 fix round；对照四个 Important：invalid run 不复活、有效请求控制进 fingerprint、保留失败生成/judge 诊断、生成/judge 受总 deadline 约束。
+- [x] 运行现有失败回归，追加缺少的持续流超时用例；先记录实际 RED，不将先前 441 passed 套到当前未完成修复。
 
 ```bash
 .venv/bin/python -m pytest tests/test_knowledge_evaluation.py tests/test_knowledge_evidence.py -q
 ```
 
-- [ ] 修复时使 invalid 为终态；在收集流时先保存收到的正文再校验引用，超时关闭流且不调用 judge；保留安全异常合同。修复核心顺序如下，沿用已有记录字段名：
+- [x] 修复时使 invalid 为终态；在收集流时先保存收到的正文再校验引用，超时关闭流且不调用 judge；保留安全异常合同。修复核心顺序如下，沿用已有记录字段名：
 
 ```python
 if manifest["status"] == "invalid":
@@ -96,8 +96,8 @@ async with asyncio.timeout_at(deadline):
             parts.append(token)
 ```
 
-- [ ] 重跑覆盖测试；共享网关有改动时执行证据评估测试，生命周期未改不重复跑本地权重全套。记录准确命令、结果和修复提交。
-- [ ] 由与修复者不同的评审者对原四组问题及新改动破坏做 scoped rereview；Minor 继续进入原最终评审清单。恢复原 UI/文档所有权，确定第 5 章代码基线；真实外部验证保持 pending，不制造 calibration 文件。
+- [x] 重跑覆盖测试；共享网关有改动时执行证据评估测试，生命周期未改不重复跑本地权重全套。记录准确命令、结果和修复提交。
+- [x] 由与修复者不同的评审者对原四组问题及新改动破坏做 scoped rereview；Minor 继续进入原最终评审清单。恢复原 UI/文档所有权，确定第 5 章代码基线；真实外部验证保持 pending，不制造 calibration 文件。
 - [ ] 精确暂存该任务文件并提交；立即写两个章节依赖阶段记录。确认基线后建立第 5 章分支，读取原开发记录中的剩余章节验收，不标第 4 章 finish。
 
 ### Task 1: 官方 PostgreSQL checkpointer 与版本/启动合同
