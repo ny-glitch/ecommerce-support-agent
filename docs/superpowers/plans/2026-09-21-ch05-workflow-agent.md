@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-21-ch05-workflow-agent-design.md`，用户于 2026-09-21 回复“规格通过”。
 
-**Status:** 待用户审阅计划及选择执行方式；本文件中的命令和测试是执行步骤，不是已执行证据。
+**Status:** 用户已回复“计划通过，选 1”，采用子代理逐任务实施与独立评审；本文件中尚未勾选的命令和测试是执行步骤，不是已执行证据。
 
 ## Global Constraints
 
@@ -544,4 +544,4 @@ HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 .venv/bin/python -m pytest --require-mys
 
 执行前引用资料：Context7 查询记录见本章 dev-notes；官方 [LangGraph graph API](https://docs.langchain.com/oss/python/langgraph/graph-api)、[子图](https://docs.langchain.com/oss/python/langgraph/use-subgraphs)、[checkpoint 包](https://pypi.org/project/langgraph-checkpoint-postgres/)、[LangGraph 包](https://pypi.org/project/langgraph/)、[psycopg](https://pypi.org/project/psycopg/)、[PostgreSQL 支持版本](https://www.postgresql.org/support/versioning/)。每个任务进入具体 API 实现前再次以 Context7 和实际安装源码核对，计划示例不能压过实际版本合同。
 
-计划审核交接：推荐子代理逐任务实施并独立评审，因为本计划跨图状态、两库提交与用户确认副作用，接口错误的代价高。也可由主代理在本任务内顺序实施，再做整分支独立评审，减少上下文开销。等待用户审阅计划并选择，当前没有启动任务实现。
+计划审核交接：用户已批准计划，选择子代理逐任务实施并独立评审；先完成 Task 0 的已有修复和基线整理，再依次实施 Task 1–12。执行证据随各任务追加，不把计划批准当作测试通过。
