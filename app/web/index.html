@@ -527,7 +527,7 @@
         renderAnswer(reply, answer); reply.completed = true; reply.retrieval.hidden = true;
         reply.workflowBadges.forEach(badge => { badge.dataset.status = 'succeeded'; });
         reply.actionButtons.forEach(button => { button.disabled = false; });
-        if (reply.actionTray) reply.actionTray.querySelector('.action-hint').textContent = '两个选项可独立选择；不选择也可以继续对话。';
+        if (reply.actionTray) reply.actionTray.querySelector('.action-hint').textContent = '可自主选择处理方式；不选择也可以继续对话。';
         addFeedback(reply);
       } catch (error) {
         const stopped = controller.signal.aborted;

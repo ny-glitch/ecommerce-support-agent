@@ -1,18 +1,23 @@
 # Chapter 4 evaluation status
 
-## Status
+## Current status — 2026-09-22
 
-The evaluator, calibration CLI, resumable artifacts, metrics, report generation,
-and controlled local tests are implemented. Real calibration and comparison are
-pending because `external-evaluation-authorization.md` is still
-`PENDING_USER_REPLY`. No Chapter 4 question, excerpt, generated answer, or judge
-request was sent to the configured DeepSeek endpoint during this task.
+Real evaluations now exist, but there is **no accepted calibration or four-strategy comparison report yet**. The user authorized the demonstration-data transfer to DeepSeek (`api.deepseek.com`); the measured endpoint used model `deepseek-flash`, thinking disabled, zero automatic retries. No real customer data was included.
 
-There are no production quality numbers or production calibration artifact yet.
-Fixtures in the automated tests are synthetic and must not be cited as product
-quality evidence.
+| Run | Coverage | Result |
+| --- | --- | --- |
+| `evals/reports/ch04/2026-09-22-calibration` | 30/30 | Incomplete: two judge responses confused display reference numbers with source chunk IDs. |
+| `evals/reports/ch04/2026-09-22-calibration-v2` | 30/30 | Incomplete: one query-normalization `invalid_response` (`cal-literal-01`); judge namespace fix already applied. |
 
-## Commands to run after authorization
+The second run measured Recall@5/10/50 = **1.0**, MRR@50 = **0.9167**, retained evidence coverage = **0.95**, answerable answer rate = **0.80**, unknown refusal = **0.90** (one false accept in ten), and model-judged Faithfulness = **0.988235 over 17 valid judgments**. These are calibration-split observations for its executed retrieval strategy, **not** four-strategy comparison numbers. The candidate threshold `0.5767565140084168` remains unaccepted because a technical failure is present. Provider token usage was not captured by this evaluator and is unknown.
+
+The false accept `cal-none-04` infers a V500-Lock 750 ml answer from 500 ml evidence. Four answerable cases were refused (`cal-model-02`, `cal-colloquial-04`, `cal-synonym-03`, `cal-category-01`). `cal-colloquial-01` scored 0.8 in the model faithfulness judgment, including an unsupported charger recommendation. These quality defects remain recorded; labels and source material were not altered to hide them.
+
+The judge Prompt fix (`606a31e`) passed four fixed real probes and independent scoped review. One later diagnostic of the normalization case returned valid JSON in one request (400 tokens), but does not explain or clear the original failure: its raw failed provider response was unavailable. The prepared instrumented calibration follow-up has not run.
+
+The 60-query × four-strategy comparison has **0/240 executions** because no calibration has passed its gate. Twelve manual-review queries were preselected (two per bucket); source review remains pending actual comparison artifacts. No synthetic test metrics are presented as real quality results.
+
+## Evaluation commands (comparison requires accepted calibration)
 
 ```bash
 .venv/bin/python scripts/evaluate_knowledge.py calibrate \

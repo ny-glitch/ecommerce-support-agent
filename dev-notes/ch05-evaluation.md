@@ -1,3 +1,23 @@
+# Current status — 2026-09-22
+
+Implementation and scoped backend reviews are complete at `d2b8799`. The final required local suite is **807 passed, 1 known deprecation warning (84.32 s)**, using real isolated MySQL, PostgreSQL, Milvus and cached local models. Real-model acceptance is **not complete**; results below include failures.
+
+The user authorized demonstration questions, necessary knowledge, simulated tool results and generated answers to DeepSeek (`api.deepseek.com`). The actual configured model is `deepseek-flash`, thinking disabled, with zero automatic retries. A later, separate three-case Agent-control diagnostic was rejected by automatic approval review before process creation; a specific follow-up authorization question is pending. Zero requests from that diagnostic were sent. Original failed replies were not retained, so their cause remains unproved.
+
+| Actual run | Coverage and execution status | Selected measured results |
+| --- | --- | --- |
+| `evals/reports/ch05/2026-09-22-intents` | 35/35 attempted, incomplete; 4 technical failures | Classification and route 31/35 (88.57%); business flag 29/35; business-to-knowledge misroutes 0/15. 90 calls / 67,017 provider tokens. |
+| `evals/reports/ch05/2026-09-22-evidence` | 12/12, complete; zero technical failures | Classification, route and sufficiency 12/12; refusal 3/3; business flag 11/12; exact support IDs 10/12; exact citation IDs 7/9. 43 calls / 45,250 tokens. |
+| `evals/reports/ch05/2026-09-22-assessor` | 2/2, complete | Both injection/conflicting-source cases correctly insufficient with no supporting IDs. 2 calls / 1,437 tokens. |
+
+Total for these three runs: **135 calls / 113,704 provider tokens**. `complete` means execution coverage, not perfect answer quality. Structural ID metrics do not prove semantic faithfulness. Fixed labels were not edited to improve scores.
+
+`intent-009`, `intent-010` and `intent-022` failed with `AGENT_CONTROL_ERROR`; `intent-016` reached its conservative input-token guard and returned the bounded fallback, but is still counted as an evaluation failure (`INPUT_TOO_LONG`). Cases 009/010/022 remain awaiting the blocked diagnostic. The successful control probes in separate work do not replace these failures.
+
+Actual browser checks on isolated port 8002 have verified policy retrieval/clickable source text, unknown refusal and a low-confidence pool row, complaint actions without automatic execution, cancellation before ticket creation, one confirmed ticket, repeated confirmation before/after graceful restart without duplicates, front-end feedback locking, and the logistics tool badge. The policy save conflict observed earlier was fixed and passed a fresh browser re-test. PostgreSQL retained the completed policy checkpoint after restart. Multi-step browsing, formal quality gates, the final 8001 cutover and finish remain separate pending work. Artifacts: `evals/reports/ch05/2026-09-22-acceptance/`.
+
+The sections below retain the earlier local-only chronology and dataset rationale. Their pending-authorization and not-yet-run statements describe those earlier stages, not the current status above.
+
 # Chapter 5 intent evaluation status
 
 ## Scope and authorization boundary
@@ -117,3 +137,8 @@ Demo tests exercise terminal SSE framing, EOF/error rejection, source numeric-ID
 External transfer remains **PENDING_USER_REPLY**. No Task 12 CLI real-model evaluation or real demo has been run. No true classification accuracy, evidence quality, route-quality score or real-model token total is reported. Root retains the prior automatic-review rejection and will ask for explicit destination/data-scope permission after local work and review are concrete. The whole-branch backend review and its single scoped fix review are now accepted at `4a5641d`, with no open mandatory backend finding. Browser acceptance, demo-database migration, old 8001 handover, finish and integration choice remain release gates.
 
 Local verification results: evaluator/demo + Chapter 4 evaluator regression **69 passed** (2.08 s); both CLI help commands passed; `pip check` found no broken requirements; offline/no-deps wheel contained all 11 prompts and both new evaluation modules, and import caused zero socket connections. The final full required suite with all four dependency flags ran against actual isolated MySQL 13307/PostgreSQL 15433/Milvus and cached offline models: **782 passed, 4 failed, 1 existing Starlette warning** (80.91 s). All four failures were stale pre-Chapter-5 test fixtures in two legacy schema/init files, aligned under an explicitly approved two-file scope extension; the affected real-MySQL rerun was **10 passed** (0.30 s), covering all four failed tests. After that full run, evaluator production fix `00c7ad6` changed technical-failure observation handling; its complete evaluator-file covering run was **25 passed** (1.83 s). The final review then required a separate recovery compatibility fix: only provably migrated, uniformly completed, structurally incomplete legacy audit turns are excluded from graph history, while current corruption and checkpoint references remain strict. Its complete affected recovery/repository/service files passed **84 tests** (8.87 s) against isolated MySQL 13307 and PostgreSQL 15433 with scripted models. These are revision-specific covering runs; no subsequent all-green full-suite run was performed. The earlier wheel was not rebuilt after either production fix, so its packaging result is evidence for its earlier revision only. An earlier default-sandbox attempt failed localhost sockets and is recorded in the task report, not treated as acceptance.
+
+
+## Fresh final required-suite result — 2026-09-22
+
+On `d2b8799`, the required suite with all four database/Milvus/local-model flags completed with **807 passed, 1 existing Starlette/AnyIO deprecation warning in 84.32 seconds (exit 0)**. This is a new full run after the historical stale-fixture corrections, evaluator/recovery fixes, Prompt namespace fix and score-roundtrip fix. The raw output is `evals/reports/ch05/2026-09-22-validation/pytest-required.txt`. It supersedes the prior absence of a later all-green full test run; that earlier chronology remains below as history. No new wheel build is claimed, and real model/browser gates are separate.
