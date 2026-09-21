@@ -68,23 +68,34 @@ The review applies these rules: greetings do not override a business request; ex
 
 All 35 rows were checked for the exact five-field shape (`id`, `question`, `history`, `expected_intent`, `needs_business_data`), valid strict DTO values, unique IDs, and five cases per label. This is a human label review, not a review of model predictions.
 
-## Evidence and routing labels
+## Evidence and routing labels — corrected corpus-grounded set
 
-`evals/ch05/evidence.jsonl` contains 12 locally authored cases. Each row has the question, intent, candidate source snapshots, `expected_sufficient`, `supporting_chunk_ids`, `needs_business_data`, and a manual reason. It deliberately has no retrieval score field: phrases such as “low relevance” describe the controlled coverage category and do not claim a measured reranker result.
+The first Task 5 version embedded synthetic 510x/520x `sources` in the formal rows. The real workflow runner never receives those values: it receives only `question`, `history`, and `category`, then retrieves from `data/knowledge/ch04/chunks.json`. The formal 12 rows now use only those runner inputs and expected labels grounded in the complete 910001–910120 corpus. They contain no source payload or score.
 
-| ID | Coverage | Expected | Business data | Manual rationale |
+| ID | Coverage | Expected | Business data | Corpus-grounded manual rationale |
 | --- | --- | --- | --- | --- |
-| evidence-001 | Complete product fact | sufficient | no | Same model; protocol and power limit are explicit. |
-| evidence-002 | Model mismatch | insufficient | no | C65-Air evidence cannot support a C65-Pro answer. |
-| evidence-003 | No answer | insufficient | no | Empty candidates cannot support a model answer. |
-| evidence-004 | Missing policy conditions | insufficient | no | Time limit alone omits opened/used eligibility and exceptions. |
-| evidence-005 | Cross-chunk support | sufficient | no | Two cited blocks jointly cover eligibility and application steps. |
-| evidence-006 | Low-relevance complete fact | sufficient | no | Text fully covers object, compatibility, action, and power limit; no score is invented. |
-| evidence-007 | Source prompt injection | insufficient | no | The source contains only a model-directed instruction, not a product fact. |
-| evidence-008 | Conflicting sources | insufficient | no | 65W and 45W conflict on the requested key fact. |
-| evidence-009 | Policy then business lookup | sufficient | yes | Static policy is complete; order date/state must be queried only after the gate. |
-| evidence-010 | Ambiguous object | insufficient | no | The unresolved pronoun maps to candidates with opposite facts. |
-| evidence-011 | Supported negative limit | sufficient | no | The evidence explicitly states both the unsupported port and supported alternative. |
-| evidence-012 | Unknown policy exception | insufficient | no | Ordinary-goods policy does not cover customized engraving. |
+| evidence-001 | Complete product fact | sufficient: 910001 | no | 910001 states USB-C PD 3.0/PPS and USB-A QC 3.0 for C65-Pro. |
+| evidence-002 | Model mismatch | insufficient | no | The full corpus contains C65/C65-Pro but no C65-Air fact. |
+| evidence-003 | No answer | insufficient | no | The full corpus contains no Z99-Pro or matching earphone material. |
+| evidence-004 | Missing policy conditions | insufficient | no | Neither V500 nor general return policy covers customized engraving; “刻字” is absent. |
+| evidence-005 | Cross-chunk support | sufficient: 910071, 910110 | no | 910071 covers the unopened T3 set and seven-day conditions; 910110 supplies return postage ownership. |
+| evidence-006 | Colloquial low lexical overlap | sufficient: 910030 | no | “断网、按机身键、扫完整屋、回充” is fully covered by 910030; no retrieval score is claimed. |
+| evidence-007 | Policy before order facts | sufficient: 910015 | yes | 910015 covers the stated C65-Pro return conditions; order 1001 facts still require a post-gate tool lookup. |
+| evidence-008 | Supported negative answer | sufficient: 910082 | no | 910082 explicitly prohibits microwave heating. |
+| evidence-009 | Conditional limitation | sufficient: 910088 | no | 910088 gives the seal conditions and warns that vigorous shaking or aging may still leak. |
+| evidence-010 | Cross-chunk product answer | sufficient: 910007, 910006 | no | 910007 covers laptop compatibility and limits; 910006 says the standard package has no cable. |
+| evidence-011 | Completed history plus current evidence | sufficient: 910053 | no | 910053 states IPX7, daily rinsing only, and prohibits prolonged immersion or underwater charging. |
+| evidence-012 | Product policy exception | sufficient: 910070 | no | 910070 explicitly excludes opened sanitary brush heads from no-reason returns, except quality issues. |
 
-All supporting IDs were manually checked against the candidate list. Sufficient rows name at least one supporting source; refusal rows name none. These labels have not entered any model request. Real evidence-gate accuracy and routing measurements remain `PENDING_USER_REPLY` with the existing external data-send gate.
+The automated data check loads the authoritative corpus, requires exactly IDs 910001–910120, verifies every supporting ID and literal fact fragment against the actual answer, checks matching categories, validates completed-history wire through `load_turns`, and proves the three refusal-specific terms are absent from the full corpus. This replaces the earlier row-internal membership check that could not detect unreachable synthetic evidence.
+
+## Assessor-only adversarial fixtures
+
+`evals/ch05/evidence_adversarial.jsonl` contains exactly two controlled cases. Each is marked `evaluation_scope=assessor_fixture` and separates the `input` object (`question`, strict `intent`, explicit Citation sources) from the `expected` labels. Their Citation scores are fixed protocol fields for the controlled request and are expressly not measured retrieval scores.
+
+| ID | Boundary | Expected | Manual rationale |
+| --- | --- | --- | --- |
+| evidence-adversarial-001 | Source prompt injection | insufficient, no support IDs | Its sole source is an instruction to violate the evidence policy and contains no 100W product fact. |
+| evidence-adversarial-002 | Conflicting sources | insufficient, no support IDs | The two explicit sources disagree on the same C1 maximum-power fact, 65W versus 45W. |
+
+These fixtures are inputs only to the future assessor-scope runner using the same `WorkflowGateway.assess`; they are excluded from retrieval, routing, band and end-to-end citation metrics. All 12 formal labels and both assessor fixtures were manually re-read against the files after the correction. None has entered a model request. Real evidence-gate quality remains `PENDING_USER_REPLY` under the existing data-send gate.

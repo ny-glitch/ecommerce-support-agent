@@ -10,6 +10,7 @@ import pytest
 from app.config import Settings
 from app.db.contracts import TurnRef
 from app.knowledge.contracts import (
+    Citation,
     EvidenceAssessment,
     KnowledgeChunk,
     QueryPlan,
@@ -28,7 +29,7 @@ from app.workflow.knowledge import (
     serialize_retrieval,
 )
 from app.workflow.routing import knowledge_band
-from app.workflow.state import TurnRuntime
+from app.workflow.state import TurnRuntime, load_turns
 from ch04_helpers import make_chunk
 
 
@@ -560,10 +561,53 @@ def test_high_band_template_uses_only_supported_full_sources() -> None:
     )
 
 
-def test_evidence_labels_have_twelve_manual_cases_without_fabricated_scores() -> None:
-    path = Path("evals/ch05/evidence.jsonl")
-    cases = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+def _jsonl(path: str) -> list[dict]:
+    return [
+        json.loads(line)
+        for line in Path(path).read_text(encoding="utf-8").splitlines()
+    ]
 
+
+def _corpus_chunks() -> dict[int, dict]:
+    corpus = json.loads(
+        Path("data/knowledge/ch04/chunks.json").read_text(encoding="utf-8")
+    )
+    return {
+        chunk["id"]: chunk
+        for document in corpus["documents"]
+        for chunk in document["chunks"]
+    }
+
+
+def test_formal_evidence_labels_are_grounded_in_the_real_ch04_corpus() -> None:
+    cases = _jsonl("evals/ch05/evidence.jsonl")
+    chunks = _corpus_chunks()
+    corpus_text = json.dumps(list(chunks.values()), ensure_ascii=False)
+    expected_facts = {
+        "evidence-001": {910001: ("PD 3.0", "PPS", "QC 3.0")},
+        "evidence-005": {
+            910071: ("签收后 7 天内", "刷头密封完好"),
+            910110: ("寄回运费由买家承担",),
+        },
+        "evidence-006": {910030: ("机身启动键", "全屋清扫", "回充")},
+        "evidence-007": {910015: ("签收后 7 天内", "仅验货", "无使用痕迹")},
+        "evidence-008": {910082: ("不可以", "微波炉")},
+        "evidence-009": {910088: ("密封圈正确安装", "可能渗漏")},
+        "evidence-010": {
+            910007: ("不超过 65W", "可能充电缓慢或无法充电"),
+            910006: ("不含充电线",),
+        },
+        "evidence-011": {910053: ("IPX7", "不得长时间浸泡", "水下充电")},
+        "evidence-012": {910070: ("密封包装拆封后不支持无理由退货",)},
+    }
+    absent_terms = {
+        "evidence-002": "C65-Air",
+        "evidence-003": "Z99-Pro",
+        "evidence-004": "刻字",
+    }
+
+    assert len(chunks) == 120
+    assert set(chunks) == set(range(910001, 910121))
     assert len(cases) == 12
     assert len({case["id"] for case in cases}) == 12
     assert {
@@ -572,21 +616,79 @@ def test_evidence_labels_have_twelve_manual_cases_without_fabricated_scores() ->
         "policy_conditions_missing",
         "cross_chunk_support",
         "low_relevance_complete",
-        "source_prompt_injection",
     }.issubset({case["case_type"] for case in cases})
+    assert {case["id"] for case in cases if case["expected_sufficient"]} == set(
+        expected_facts
+    )
     for case in cases:
         assert set(case) == {
             "id",
             "case_type",
             "question",
-            "intent",
-            "sources",
+            "history",
+            "category",
+            "expected_intent",
             "expected_sufficient",
             "supporting_chunk_ids",
             "needs_business_data",
             "reason",
         }
+        assert "sources" not in case
         assert "score" not in json.dumps(case, ensure_ascii=False).lower()
-        source_ids = {source["chunk_id"] for source in case["sources"]}
-        assert set(case["supporting_chunk_ids"]).issubset(source_ids)
-        assert bool(case["supporting_chunk_ids"]) == case["expected_sufficient"]
+        assert isinstance(case["question"], str) and case["question"].strip()
+        assert case["category"] is None or isinstance(case["category"], str)
+        load_turns(case["history"])
+        IntentResult(
+            intent=case["expected_intent"],
+            needs_business_data=case["needs_business_data"],
+        )
+        support = case["supporting_chunk_ids"]
+        assert bool(support) == case["expected_sufficient"]
+        assert set(support).issubset(chunks)
+        if case["category"] is not None:
+            assert all(chunks[chunk_id]["category"] == case["category"] for chunk_id in support)
+        for chunk_id, facts in expected_facts.get(case["id"], {}).items():
+            assert chunk_id in support
+            for fact in facts:
+                assert fact in chunks[chunk_id]["answer"]
+                assert fact in case["reason"]
+        if case["id"] in absent_terms:
+            term = absent_terms[case["id"]]
+            assert term in case["question"]
+            assert term in case["reason"]
+            assert term not in corpus_text
+
+
+def test_adversarial_evidence_cases_are_isolated_assessor_inputs() -> None:
+    cases = _jsonl("evals/ch05/evidence_adversarial.jsonl")
+
+    assert len(cases) == 2
+    assert {case["case_type"] for case in cases} == {
+        "source_prompt_injection",
+        "conflicting_sources",
+    }
+    for case in cases:
+        assert set(case) == {
+            "id",
+            "case_type",
+            "evaluation_scope",
+            "input",
+            "expected",
+            "reason",
+        }
+        assert case["evaluation_scope"] == "assessor_fixture"
+        assert set(case["input"]) == {"question", "intent", "sources"}
+        assert set(case["expected"]) == {
+            "sufficient",
+            "reason_code",
+            "supporting_chunk_ids",
+        }
+        IntentResult.model_validate(case["input"]["intent"], strict=True)
+        sources = [Citation.model_validate(source, strict=True) for source in case["input"]["sources"]]
+        assert sources
+        assert case["expected"] == {
+            "sufficient": False,
+            "reason_code": "insufficient_evidence",
+            "supporting_chunk_ids": [],
+        }
+        assert "expected" not in json.dumps(case["input"], ensure_ascii=False)
