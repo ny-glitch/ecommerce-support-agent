@@ -16,6 +16,8 @@ from app.config import Settings
 from app.db.contracts import StoredTurn
 from app.errors import ServiceError
 from app.knowledge.contracts import Citation
+from app.tools.executor import ToolExecutor, ToolOutcome, ToolProgress
+from app.tools.registry import ToolRegistry
 from app.tools.schemas import OrderInput
 from app.workflow.contracts import FinalControl, IntentResult
 from app.workflow.gateway import WorkflowGateway
@@ -305,6 +307,76 @@ async def test_decide_returns_one_whitelisted_native_tool_call() -> None:
         "query_logistics",
     }
     assert hook_schemas == [bodies[0]["tools"]]
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        "{}",
+        '{"order_id":"1001","unexpected":"x"}',
+        '{"order_id":["1001"]}',
+    ],
+    ids=["missing", "extra", "wrong-type"],
+)
+async def test_parseable_business_argument_errors_reach_original_executor_once(
+    arguments: str,
+) -> None:
+    requests: list[httpx.Request] = []
+    business_invocations = 0
+
+    @tool("query_order", args_schema=OrderInput)
+    async def observed_query_order(order_id: str) -> str:
+        """查询指定订单的演示状态。"""
+        nonlocal business_invocations
+        business_invocations += 1
+        return order_id
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json=_completion(
+                None,
+                finish_reason="tool_calls",
+                tool_calls=[
+                    _tool_call(
+                        arguments=arguments,
+                        call_id="call-invalid-business-args",
+                    )
+                ],
+            ),
+        )
+
+    gateway, client = _gateway(handler)
+    try:
+        decision = await gateway.decide(
+            [HumanMessage("查询订单")], [observed_query_order]
+        )
+        assert isinstance(decision, AIMessage)
+        events = [
+            event
+            async for event in ToolExecutor(max_attempts=2).run(
+                decision.tool_calls[0],
+                ToolRegistry([observed_query_order]),
+                deadline=1e30,
+            )
+        ]
+    finally:
+        await client.aclose()
+
+    assert len(requests) == 1
+    assert business_invocations == 0
+    assert len(events) == 2
+    assert isinstance(events[0], ToolProgress)
+    assert events[0].attempt == 1
+    assert isinstance(events[1], ToolOutcome)
+    assert events[1].attempt == 1
+    assert events[1].terminal_status == "failed"
+    assert events[1].message.tool_call_id == "call-invalid-business-args"
+    assert json.loads(str(events[1].message.content)) == {
+        "status": "error",
+        "code": "INVALID_TOOL_ARGUMENTS",
+    }
 
 
 async def test_decide_treats_tool_name_in_control_json_as_non_executable() -> None:
