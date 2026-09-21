@@ -26,6 +26,15 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=False,
         help="fail instead of skipping when the isolated Milvus service is absent",
     )
+    parser.addoption(
+        "--require-postgres",
+        action="store_true",
+        default=False,
+        help=(
+            "fail instead of skipping when the isolated PostgreSQL test database "
+            "is absent"
+        ),
+    )
 
 
 @pytest.fixture(autouse=True)

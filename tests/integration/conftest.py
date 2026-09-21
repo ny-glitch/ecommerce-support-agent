@@ -8,6 +8,8 @@ import pytest
 import pytest_asyncio
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from psycopg import ProgrammingError
+from psycopg.conninfo import conninfo_to_dict
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
@@ -24,6 +26,93 @@ class MySQLTestSettings(BaseSettings):
     )
 
     test_database_url: SecretStr | None = None
+
+
+class PostgreSQLTestSettings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env.test",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        hide_input_in_errors=True,
+    )
+
+    test_checkpoint_database_url: SecretStr | None = None
+
+
+def load_test_checkpoint_database_url(require_postgres: bool) -> str:
+    secret = PostgreSQLTestSettings().test_checkpoint_database_url
+    if secret is None:
+        if require_postgres:
+            pytest.fail(
+                "--require-postgres requires TEST_CHECKPOINT_DATABASE_URL"
+            )
+        pytest.skip("TEST_CHECKPOINT_DATABASE_URL is not configured")
+
+    raw_url = secret.get_secret_value()
+    try:
+        connection = conninfo_to_dict(raw_url)
+    except ProgrammingError:
+        pytest.fail("TEST_CHECKPOINT_DATABASE_URL is not a valid PostgreSQL URL")
+    if (
+        connection.get("host") != "127.0.0.1"
+        or connection.get("port") != "15433"
+        or connection.get("dbname") != "support_graph_test"
+        or connection.get("user") != "support_graph_test"
+    ):
+        pytest.fail(
+            "TEST_CHECKPOINT_DATABASE_URL must use PostgreSQL, the isolated "
+            "support_graph_test account and database, and 127.0.0.1:15433"
+        )
+    return raw_url
+
+
+async def clear_checkpoint_test_threads(store) -> None:
+    saver = await store.open()
+    thread_ids = {
+        checkpoint.config["configurable"]["thread_id"]
+        async for checkpoint in saver.alist(None)
+        if checkpoint.config["configurable"]["thread_id"].startswith(
+            "ch05_test_"
+        )
+    }
+    for thread_id in thread_ids:
+        if not thread_id.startswith("ch05_test_"):
+            raise RuntimeError("refusing to clean a non-test checkpoint thread")
+        await saver.adelete_thread(thread_id)
+
+
+@pytest_asyncio.fixture
+async def checkpoint_settings(request: pytest.FixtureRequest):
+    from app.config import Settings
+    from app.workflow.checkpoints import CheckpointStore
+
+    raw_url = load_test_checkpoint_database_url(
+        require_postgres=request.config.getoption("--require-postgres")
+    )
+    settings = Settings(
+        _env_file=None,
+        llm_base_url="https://api.example.com/v1",
+        llm_model="test-model",
+        llm_api_key="test-key",
+        checkpoint_database_url=raw_url,
+    )
+    store = CheckpointStore(settings, test_mode=True)
+    ready = False
+    try:
+        try:
+            await store.setup()
+            await store.check()
+            ready = True
+        except Exception as exc:
+            if request.config.getoption("--require-postgres"):
+                pytest.fail(f"--require-postgres requires PostgreSQL 17.11: {exc}")
+            pytest.skip(f"PostgreSQL 17.11 is not available: {exc}")
+        await clear_checkpoint_test_threads(store)
+        yield settings
+    finally:
+        if ready:
+            await clear_checkpoint_test_threads(store)
+        await store.aclose()
 
 
 def load_test_database_url(require_mysql: bool) -> str:
