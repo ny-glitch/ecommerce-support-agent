@@ -142,3 +142,13 @@ def build_registry(
             )
         },
     )
+
+
+def build_readonly_registry(
+    context: ToolContext, faq: FaqRepository, tickets: TicketRepository,
+) -> ToolRegistry:
+    """Expose only the original three query tools, with their original policies."""
+    original = build_registry(context, faq, tickets)
+    names = {'query_order', 'query_product', 'query_logistics'}
+    selected = [item for item in original.tools if item.name in names]
+    return ToolRegistry(selected, policies={item.name: original.policy(item.name) for item in selected})

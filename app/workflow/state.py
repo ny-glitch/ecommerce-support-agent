@@ -219,3 +219,48 @@ def load_turns(values: list[dict]) -> list[StoredTurn]:
         seen.add(value['turn_id'])
         turns.append(StoredTurn(value['turn_id'], _load_messages(value['messages'])))
     return turns
+
+
+def load_tool_messages(values: list[dict]) -> list[BaseMessage]:
+    """Validate settled tool pairs from the current, unfinished turn.
+
+    This protocol is deliberately separate from completed-history validation:
+    it contains neither a user message nor a fabricated final answer.
+    """
+    values = _json_copy(values)
+    if not isinstance(values, list) or len(values) % 2:
+        raise ValueError('current tool messages require settled pairs')
+    messages: list[BaseMessage] = []
+    seen: set[str] = set()
+    for index in range(0, len(values), 2):
+        call, result = values[index:index + 2]
+        if (not isinstance(call, dict) or set(call) != {'role', 'content', 'tool_calls'}
+                or call['role'] != 'assistant' or not isinstance(call['content'], str)
+                or not isinstance(call['tool_calls'], list) or len(call['tool_calls']) != 1):
+            raise ValueError('invalid current tool call')
+        item = call['tool_calls'][0]
+        if (not isinstance(item, dict) or set(item) - {'id', 'name', 'args', 'type'}
+                or not isinstance(item.get('id'), str) or not item['id'] or item['id'] in seen
+                or not isinstance(item.get('name'), str) or not item['name']
+                or not isinstance(item.get('args'), dict) or item.get('type', 'tool_call') != 'tool_call'):
+            raise ValueError('invalid or duplicate current tool call')
+        seen.add(item['id'])
+        if (not isinstance(result, dict)
+                or set(result) - {'role', 'content', 'tool_call_id', 'name', 'status'}
+                or result.get('role') != 'tool' or not isinstance(result.get('content'), str)
+                or result.get('tool_call_id') != item['id']
+                or result.get('name') not in (None, item['name'])
+                or result.get('status', 'success') not in ('success', 'error')):
+            raise ValueError('orphaned or mismatched current tool result')
+        messages.extend([
+            AIMessage(call['content'], tool_calls=[item]),
+            ToolMessage(result['content'], tool_call_id=item['id'], name=result.get('name'),
+                        status=result.get('status', 'success')),
+        ])
+    return messages
+
+
+def dump_tool_messages(messages: Sequence[BaseMessage]) -> list[dict]:
+    values = [_dump_message(message) for message in messages]
+    load_tool_messages(values)
+    return values
