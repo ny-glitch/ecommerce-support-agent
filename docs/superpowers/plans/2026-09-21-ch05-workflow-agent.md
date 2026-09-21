@@ -274,7 +274,7 @@ return FinalControl.model_validate_json(str(reply.content))
 
 ### Task 5: 固定检索、三级分档与独立证据闸
 
-**Files:** Create `app/workflow/knowledge.py`、`tests/test_workflow_knowledge.py`、`evals/ch05/evidence.jsonl`；Modify `app/knowledge/evidence.py`、`app/knowledge/pipeline.py`（共享选择协议）、`app/workflow/contracts.py`、`app/workflow/prompts.py`、`tests/test_knowledge_evidence.py`。
+**Files:** Create `app/workflow/knowledge.py`、`tests/test_workflow_knowledge.py`、`evals/ch05/evidence.jsonl`；Modify `app/knowledge/evidence.py`、`app/knowledge/pipeline.py`（共享选择协议）、`app/workflow/contracts.py`、`app/workflow/prompts.py`、`tests/test_knowledge_evidence.py`、`app/config.py`、`.env.example`、`tests/test_config_context.py`（补齐规格§5.1 的阈值环境配置与验证）。
 
 **Interfaces:**
 - `EvidenceSelector(fits)` 提供 `select(ranked:tuple[RankedChunk,...],query:QueryPlan)->EvidencePlan`；原 EvidenceBudget 与新的 `WorkflowEvidenceBudget(settings,history,question,intent,tool_schemas)` 共用选择/编号/edge_order，不再为 Workflow 造 AIMessage 工具申请。
@@ -282,6 +282,8 @@ return FinalControl.model_validate_json(str(reply.content))
 - `KnowledgeStage(normalizer_factory,retriever,gateway_factory,settings)`：`retrieve(question,category,*,runtime:TurnRuntime,emit)->RetrievalResult`；`assess(retrieval:RetrievalResult,intent,history,tool_schemas,*,runtime:TurnRuntime,emit)->WorkflowKnowledgeResult`；`run(question,category,intent,history,tool_schemas,*,runtime:TurnRuntime,emit)->WorkflowKnowledgeResult` 是前两者的顺序组合，仅供独立测试/评估，不写数据库。
 - `serialize_retrieval(result:RetrievalResult)->dict` 与 `deserialize_retrieval(value:dict)->RetrievalResult` 在 knowledge.py 实现；保存 query、最多 50 个完整 RankedChunk 快照、raw_count/stale_count/strategy，校验字段/条数/分数，不写资源对象。外层 retrieve 节点将这个 JSON 放入 State.retrieval，evidence_gate 读取，不做第二次检索。
 - 消费 Task 4 的 `build_workflow_messages`。`knowledge_target(intent:IntentResult, band:str|None, sufficient:bool)->str` 为本任务产出的纯路由函数。
+
+- 配置合同：Settings 新增 `workflow_knowledge_lower_threshold=0.7` 与 `workflow_knowledge_upper_threshold=0.8`，环境变量为对应全大写名称；校验有限数值及 `0 <= lower < upper <= 1`。KnowledgeStage 分档显式使用该配置，旧 calibration 阈值保持原用途。先测默认值、环境读取、非法顺序/非有限值和实际 stage 使用自定义合法阈值，最终 GREEN 加 `tests/test_config_context.py`。
 
 - [ ] 先写 RED：0.65 且充分可以生成、0.95 但证据不充分必须 fallback；两阈值边界、零命中/过期、类别过滤不继承、预算删除整块后才自评；不得把旧 calibration 下限应用到新三级路由。
 
