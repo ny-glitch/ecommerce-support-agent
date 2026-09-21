@@ -247,4 +247,3 @@ async def test_tool_failure_returns_only_the_safe_business_code(
     assert caught.value.code == "TICKET_CONFLICT"
     assert caught.value.status_code == 409
     assert "secret" not in caught.value.message
-

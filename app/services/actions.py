@@ -113,4 +113,3 @@ class ActionService:
             "status": completed.status,
             "action_id": completed.action_id,
         }
-

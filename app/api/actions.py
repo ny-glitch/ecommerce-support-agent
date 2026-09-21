@@ -22,4 +22,3 @@ async def confirm_action(
         str(conversation_id), str(action_id)
     )
     return ActionConfirmResult.model_validate(result)
-
