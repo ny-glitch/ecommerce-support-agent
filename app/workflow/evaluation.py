@@ -311,6 +311,7 @@ class GraphRunner:
         graph = build_workflow(isolated, None)
         state = fresh_state(runtime.ref, runtime.user_id, question, category, history, deps.settings.turn_model_budget)
         events, error_code = [], None
+        observed_trace = []
         await audit.start_turn(runtime.ref, runtime.user_id, question)
         try:
             iterator = runtime.operations.track_iterator(graph.astream(state,
@@ -320,15 +321,37 @@ class GraphRunner:
                 try: part = await runtime.operations.run(lambda: anext(iterator), runtime.deadline)
                 except StopAsyncIteration: break
                 if part['type'] == 'custom': events.append(part['data'])
-                elif part['type'] == 'values' and not part['ns']: state = part['data']
+                elif part['type'] == 'values':
+                    # Child values are observations, never authoritative outer
+                    # routing/evidence. Keep only their append-only trace; an
+                    # Agent may fail before its final state reaches the parent.
+                    candidate = part['data'].get('trace', [])
+                    if candidate[:len(observed_trace)] == observed_trace:
+                        observed_trace = deepcopy(candidate)
+                    if not part['ns']:
+                        state = part['data']
         except Exception as error:
             error_code = _error_code(error)
         finally:
             await runtime.operations.drain()
         intent = state.get('intent') or {}
-        trace = state.get('trace', [])
-        if not error_code and state.get('budget_exhausted'):
-            error_code = 'TURN_BUDGET_EXHAUSTED'
+        trace = observed_trace
+        # Agent uses budget_exhausted for several independent limits. Its
+        # budget_reply can append a generic 'budget' after a specific cause;
+        # retain the first observed cause rather than that generic follow-up.
+        limit_reason = next((item['reason'] for item in trace
+            if item.get('status') == 'limited'
+            and item.get('reason') not in {None, 'budget'}), None)
+        if state.get('budget_exhausted'):
+            limit_reason = limit_reason or 'unreported'
+            if not error_code:
+                error_code = {
+                    'TURN_BUDGET_EXHAUSTED': 'TURN_BUDGET_EXHAUSTED',
+                    'decisions': 'AGENT_DECISION_LIMIT',
+                    'tools': 'AGENT_TOOL_LIMIT',
+                    'INPUT_TOO_LONG': 'INPUT_TOO_LONG',
+                    'deadline': 'TURN_DEADLINE_EXCEEDED',
+                }.get(limit_reason, 'AGENT_LIMIT_UNSPECIFIED')
         score = state['score']
         if score is None and state.get('retrieval'):
             score = max((item['score'] for item in state['retrieval']['ranked']), default=None)
@@ -336,7 +359,7 @@ class GraphRunner:
             lower=deps.settings.workflow_knowledge_lower_threshold,
             upper=deps.settings.workflow_knowledge_upper_threshold)
         return {'status': 'failed' if error_code else state['status'], 'graph_status': state['status'],
-            'error_code': error_code,
+            'error_code': error_code, 'limit_reason': limit_reason,
             'intent': intent.get('intent'), 'needs_business_data': intent.get('needs_business_data'),
             'route': state['route'], 'score': score, 'band': band,
             'assessment': state['assessment'], 'sources': state['sources'],

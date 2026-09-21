@@ -309,3 +309,78 @@ async def test_cli_real_graph_assembly_uses_readonly_corpus_and_invalidates_unve
     row=json.loads((args.output_dir/'results.jsonl').read_text())
     assert row['observation']['model_calls']==1
     assert row['observation']['usage']['total_tokens']==25
+
+
+def _agent_evaluation_dependencies(*, decisions, knowledge=False, tokens=None, **limits):
+    from tests.test_workflow_graph import setup_workflow, settings, ScriptedKnowledgeStage, knowledge_result
+    from app.workflow.contracts import IntentResult
+    from app.workflow.nodes import WorkflowDependencies
+    from app.workflow.agent import AgentDependencies
+    from app.tools.executor import ToolExecutor
+    selected = settings(**limits)
+    existing = setup_workflow(
+        intent=IntentResult(intent='return_refund' if knowledge else 'order', needs_business_data=True),
+        knowledge=ScriptedKnowledgeStage(knowledge_result('agent_tools', score=.74)) if knowledge else None,
+        decisions=decisions, tokens=(['已查询订单。[1]' if knowledge else '已查询订单。']
+            if tokens is None else tokens))
+    factory = lambda runtime: existing[3].bind(runtime, selected)
+    agent = AgentDependencies(selected, factory, existing[5], None, None, ToolExecutor())
+    return WorkflowDependencies(selected, factory, existing[4], agent,
+        existing[5], existing[6], existing[7])
+
+
+def _order_call(identifier='call-one'):
+    from langchain_core.messages import AIMessage
+    return AIMessage('', tool_calls=[{'name': 'query_order', 'id': identifier,
+                                     'args': {'order_id': '1001'}}])
+
+
+@pytest.mark.parametrize('knowledge', [False, True])
+async def test_failed_agent_preserves_settled_tool_trace_and_outer_evidence(knowledge):
+    deps = _agent_evaluation_dependencies(knowledge=knowledge,
+        decisions=[_order_call(), ServiceError('UPSTREAM_ERROR', 'controlled failure', 502)])
+    result = await GraphRunner(deps)('先查订单1001再继续核对', [], None)
+    assert result['error_code'] == 'UPSTREAM_ERROR'
+    assert result['model_calls'] == 3
+    assert result['tools'] == ['query_order']
+    assert result['node_path'] == (['resolve', 'classify', 'retrieve', 'evidence_gate', 'agent', 'tool']
+        if knowledge else ['resolve', 'classify', 'agent', 'tool'])
+    assert result['trace'][-1] == {'stage': 'tool', 'step': 0, 'name': 'query_order',
+        'tool_call_id': 'call-one', 'status': 'succeeded', 'attempts': 1}
+    assert result['route'] == ('knowledge' if knowledge else 'business')
+    assert result['score'] == (.74 if knowledge else None)
+    assert result['band'] == ('middle' if knowledge else None)
+    if knowledge:
+        assert result['assessment']['supporting_chunk_ids'] == [910001]
+        assert result['sources'][0]['chunk_id'] == 910001
+    assert [event['event'] for event in result['isolated_audit']['events']] == ['start', 'call', 'result']
+
+
+@pytest.mark.parametrize('reason,limits,decisions,code', [
+    ('decisions', {'agent_max_decisions': 1}, [_order_call()], 'AGENT_DECISION_LIMIT'),
+    ('tools', {'agent_max_tool_calls': 1}, [_order_call(), _order_call('call-two')], 'AGENT_TOOL_LIMIT'),
+    ('INPUT_TOO_LONG', {}, [ServiceError('INPUT_TOO_LONG', 'controlled size', 413)], 'INPUT_TOO_LONG'),
+    ('deadline', {}, [TimeoutError()], 'TURN_DEADLINE_EXCEEDED'),
+])
+async def test_agent_limits_keep_actual_reason_without_claiming_token_exhaustion(tmp_path, reason, limits, decisions, code):
+    deps = _agent_evaluation_dependencies(decisions=decisions, **limits)
+    report = await evaluate_workflow([case(intent='order')], GraphRunner(deps), output_dir=tmp_path,
+        configuration={**CONFIG, 'expected_count': 1})
+    observation = json.loads((tmp_path/'results.jsonl').read_text())['observation']
+    assert observation['budget']['remaining'] > 1000
+    assert observation['graph_status'] == 'completed'
+    assert observation['limit_reason'] == reason
+    assert observation['error_code'] == code
+    assert report['status'] == 'incomplete'
+    assert report['summary']['errors'] == {code: 1}
+
+
+async def test_agent_fixed_reply_without_observed_cause_is_explicitly_unspecified():
+    from app.workflow.contracts import FinalControl
+    deps = _agent_evaluation_dependencies(decisions=[FinalControl(kind='respond')],
+        tokens=[ServiceError('INPUT_TOO_LONG', 'controlled size', 413)])
+    result = await GraphRunner(deps)('查询订单1001', [], None)
+    assert result['status'] == 'failed' and result['graph_status'] == 'completed'
+    assert result['limit_reason'] == 'unreported'
+    assert result['error_code'] == 'AGENT_LIMIT_UNSPECIFIED'
+    assert result['budget']['remaining'] > 1000
