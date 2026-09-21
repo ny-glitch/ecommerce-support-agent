@@ -2,9 +2,16 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from app.main import create_app
+from app.main import KnowledgeDependencies, create_app
 from helpers import RecordingGateway, http_app, parse_sse, settings
 from tests.integration.conftest import mysql_db, load_test_database_url
+
+
+def explicit_legacy_knowledge_dependencies():
+    """Keep old ChatService tests explicit now production defaults to workflow."""
+    return KnowledgeDependencies(
+        repository=object(), pipeline=object(), low_confidence=object()
+    )
 
 
 def test_explicit_service_injection_bypasses_database_and_preserves_owner_404():
@@ -52,7 +59,11 @@ async def test_lifespan_closes_partial_and_successful_resources(monkeypatch, fai
             raise RuntimeError("assembly failed")
         monkeypatch.setattr(main, "ChatService", broken, raising=False)
     gateway = RecordingGateway()
-    app = create_app(settings(database_url="mysql+asyncmy://local/test"), gateway)
+    app = create_app(
+        settings(database_url="mysql+asyncmy://local/test"),
+        gateway,
+        knowledge_dependencies=explicit_legacy_knowledge_dependencies(),
+    )
     if failure:
         with pytest.raises(RuntimeError):
             async with app.router.lifespan_context(app):
@@ -121,7 +132,11 @@ async def test_production_http_assembly_persists_tool_turn_across_restart(mysql_
         return selection("query_logistics", {"order_id": "1001"})
 
     gateway.select = choose
-    first_app = create_app(configuration, gateway)
+    first_app = create_app(
+        configuration,
+        gateway,
+        knowledge_dependencies=explicit_legacy_knowledge_dependencies(),
+    )
     async with running_server(first_app) as client:
         response = await client.post("/api/chat", json={"message": "订单1001物流"})
         events = parse_sse(response.text)
@@ -133,7 +148,11 @@ async def test_production_http_assembly_persists_tool_turn_across_restart(mysql_
     assert gateway.closed
 
     restored_gateway = RecordingGateway()
-    restored_app = create_app(configuration, restored_gateway)
+    restored_app = create_app(
+        configuration,
+        restored_gateway,
+        knowledge_dependencies=explicit_legacy_knowledge_dependencies(),
+    )
     async with running_server(restored_app) as client:
         response = await client.post("/api/chat", json={"message": "继续", "session_id": sid})
         assert parse_sse(response.text)[-1]["event"] == "done"

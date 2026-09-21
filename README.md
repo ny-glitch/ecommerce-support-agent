@@ -1,8 +1,8 @@
 # 中文电商客服示例
 
-这是一个基于 FastAPI、LangChain、MySQL 和 OpenAI 兼容 Chat Completions 接口的本地客服示例。第二章在流式多轮聊天上增加了一次函数选择、最多一个业务工具执行和最终回答，可查询演示订单、商品、物流与 FAQ，也可创建持久化人工工单。售后信息提取接口仍可独立使用。
+这是一个基于 FastAPI、LangGraph、MySQL、PostgreSQL、Milvus 和 OpenAI 兼容 Chat Completions 接口的本地客服示例。当前工作流使用固定路由、知识检索与证据核验、有界 Agent 工具循环，并将会话审计和图检查点分别持久化。售后信息提取接口仍可独立使用。
 
-订单、商品和物流结果均由本地工具随机生成，只用于演示；FAQ 和工单保存在本地 MySQL。本项目没有生产鉴权、真实电商接口、退款操作、Agent Loop、RAG 或向量检索。
+订单、商品和物流结果均由本地工具随机生成，只用于演示；知识原文与工单保存在本地 MySQL。本项目没有生产鉴权、真实电商接口或退款操作。
 
 ## 安装与配置
 
@@ -52,20 +52,50 @@ docker compose up -d --wait db
 
 初始化可重复执行，不会覆盖已有密钥或删除业务数据。
 
-## 启动
+## 工作流启动顺序
 
-聊天的并发保护在进程内，因此必须使用单 worker。以下命令固定使用 8001，避免占用其他本地项目常用的 8000：
+生产 lifespan 只检查已有 schema、语料、索引和固定模型 manifest，不会自动建表、执行 `ALTER`、调用 checkpoint `setup()` 或修复索引。首次部署按以下顺序显式准备：
+
+1. 启动 MySQL、PostgreSQL 和 Milvus 依赖：
+
+   ```bash
+   docker compose up -d --wait db workflow-db knowledge-etcd knowledge-minio knowledge-milvus
+   ```
+
+2. 在旧写入者已停止的维护窗口执行 MySQL 工作流迁移，然后用只读模式确认就绪：
+
+   ```bash
+   .venv/bin/python scripts/migrate_workflow.py
+   .venv/bin/python scripts/migrate_workflow.py --check-only
+   ```
+
+3. 显式初始化 PostgreSQL checkpoint 表：
+
+   ```bash
+   .venv/bin/python scripts/init_workflow_checkpoints.py
+   ```
+
+4. 确认第四章语料已导入、固定模型 manifest 已准备，并运行现有索引校验/构建命令。该命令只使用本地模型和本地数据：
+
+   ```bash
+   .venv/bin/python scripts/init_knowledge.py
+   .venv/bin/python scripts/index_knowledge.py
+   ```
+
+5. 在独立的 8002 端口以单 worker 启动并验收：
 
 ```bash
 .venv/bin/python -m uvicorn app.main:create_app --factory \
-  --host 127.0.0.1 --port 8001 --workers 1
+  --host 127.0.0.1 --port 8002 --workers 1
 ```
 
-打开 `http://127.0.0.1:8001/` 可使用网页聊天、停止回复、新对话及售后提取。API 密钥只由服务端读取。
+打开 `http://127.0.0.1:8002/` 可使用网页聊天、停止回复、新对话及售后提取。聊天的并发 guard 在进程内，因此必须使用单 worker。现有 8001 预览只在本章真实验收通过后切换；不要占用其他项目的 8000。
 
 会话、完整消息审计和工单持久化到 MySQL，服务重启后仍可恢复。只有 `completed` 的完整轮次会回灌给模型；失败、取消或结构不完整的轮次保留作审计，但不进入后续模型上下文。`MAX_HISTORY_TURNS` 限制回灌的最近完整轮次数。进程内 guard 只负责同会话互斥和活动请求容量，所以多 worker 会绕过这项约束。
 
-## API 与两阶段工具调用
+## 历史行为：第二章 API 与两阶段工具调用
+
+以下“每轮两次模型调用”、单工具和 FAQ `LIKE` 漏召回说明是第二章历史演示合同，不是当前工作流的行为承诺。当前工作流的路由、次数上限和知识证据规则由第五章配置与图约束。
 
 发送物流问题：
 
