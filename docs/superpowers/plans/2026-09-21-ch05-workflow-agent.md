@@ -158,7 +158,7 @@ await saver.aget_tuple({"configurable": {"thread_id": "healthcheck-only"}})
 - `RequestBudget(limit: int)`：`reserve(stage, messages, *, output_tokens, tool_schemas=()) -> int` 返回本次保守额度、超限抛 `ServiceError('TURN_BUDGET_EXHAUSTED', ...)`；`record_usage(stage, usage: dict|None)`、`snapshot() -> dict`。预算按预留额累计，不因缺 usage 退款。
 - `TurnOperations.run(factory, deadline, *, mutation=False)`、`track_iterator(iterator)`、`async drain()`；`TurnRuntime(ref, user_id, started_at, deadline, budget, operations)` 只传 graph runtime context，不进 checkpoint。
 
-- [ ] RED 精确边界、知识与业务路由、上一轮 sources/category/actions 不继承、JSON roundtrip、预算在请求前拒绝；Task 2 测试同时验证四类路由返回值是代码映射而非模型生成。
+- [x] RED 精确边界、知识与业务路由、上一轮 sources/category/actions 不继承、JSON roundtrip、预算在请求前拒绝；Task 2 测试同时验证四类路由返回值是代码映射而非模型生成。
 
 ```python
 @pytest.mark.parametrize("score,expected", [(0.6999,"low"),(.7,"middle"),(.8,"middle"),(.8001,"high")])
@@ -170,8 +170,8 @@ def test_business_route_does_not_depend_on_knowledge_score():
     assert route_intent(intent) == "business"
 ```
 
-- [ ] Run `.venv/bin/python -m pytest tests/test_workflow_state.py tests/test_workflow_budget.py tests/test_turn_operations.py -q`；先确认 RED。
-- [ ] 实现纯分档/映射与 strict DTO。State 字段固定为：schema_version、conversation_id、user_id、turn_id、original_question、question、category、history、intent、route、query、retrieval、score、band、sources、assessment、knowledge_status、knowledge_target、refusal_reason、agent_mode、tool_messages、pending_call、decision_count、tool_count、control、suggestions、offers、answer、used_citations、budget、budget_exhausted、trace、status。初始可选值为空，列表为空，budget_exhausted=False，schema_version=1，status=pending；单轮字段全覆盖，history 仅来自已完成轮次。retrieval 是有界 JSON 快照，不能把运行中的模型/迭代器塞入其中。
+- [x] Run `.venv/bin/python -m pytest tests/test_workflow_state.py tests/test_workflow_budget.py tests/test_turn_operations.py -q`；先确认 RED。
+- [x] 实现纯分档/映射与 strict DTO。State 字段固定为：schema_version、conversation_id、user_id、turn_id、original_question、question、category、history、intent、route、query、retrieval、score、band、sources、assessment、knowledge_status、knowledge_target、refusal_reason、agent_mode、tool_messages、pending_call、decision_count、tool_count、control、suggestions、offers、answer、used_citations、budget、budget_exhausted、trace、status。初始可选值为空，列表为空，budget_exhausted=False，schema_version=1，status=pending；单轮字段全覆盖，history 仅来自已完成轮次。retrieval 是有界 JSON 快照，不能把运行中的模型/迭代器塞入其中。
 
 ```python
 def knowledge_band(score, *, lower=.7, upper=.8):
@@ -182,9 +182,9 @@ def knowledge_band(score, *, lower=.7, upper=.8):
     return "high" if score > upper else "middle" if score >= lower else "low"
 ```
 
-- [ ] reserve 使用现有 `estimate_tokens` 与工具 Schema 的规范 JSON 字节数，加最大输出额；记录 actual usage 与估算分开。新增配置上下限、默认 4/5/49152；运行时 start/deadline 为单调时钟，只放 TurnRuntime，不把不可跨进程的时钟值写进 State。
-- [ ] 从旧 chat 提取 bounded 行为至公共模块，保持 shield、取消排空、先等 mutation 结束再做审计终止。新增 Event 控制的取消测试：两次 cancel、操作在取消后延迟提交、迭代器正在 anext 时不得 aclose；真实外部调用次数始终有界。
-- [ ] GREEN 后同时跑 `tests/test_tool_streaming.py tests/test_knowledge_chat.py tests/test_streaming.py`，防止提取破坏旧行为；记录并提交。
+- [x] reserve 使用现有 `estimate_tokens` 与工具 Schema 的规范 JSON 字节数，加最大输出额；记录 actual usage 与估算分开。新增配置上下限、默认 4/5/49152；运行时 start/deadline 为单调时钟，只放 TurnRuntime，不把不可跨进程的时钟值写进 State。
+- [x] 从旧 chat 提取 bounded 行为至公共模块，保持 shield、取消排空、先等 mutation 结束再做审计终止。新增 Event 控制的取消测试：两次 cancel、操作在取消后延迟提交、迭代器正在 anext 时不得 aclose；真实外部调用次数始终有界。
+- [x] GREEN 后同时跑 `tests/test_tool_streaming.py tests/test_knowledge_chat.py tests/test_streaming.py`，防止提取破坏旧行为；记录并提交。
 
 ### Task 3: MySQL 幂等多步流水与工单建议仓储
 
