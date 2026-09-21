@@ -428,3 +428,140 @@ async def test_pending_repair_rejects_missing_pairs_and_conflicting_trace_withou
         assert await repo.get_turn(completed.ref, 'demo') == gold
         assert await repo.audit(cid, 'demo') == audit_before
         assert recorder.model_calls == model_calls and recorder.tool_calls == tool_calls
+
+
+async def insert_migrated_history(mysql_db, cid, *, incomplete='user_only'):
+    """Persist the exact backfilled shape, including the preserved seed-shaped turn."""
+    from app.db.models import Message
+    async with mysql_db.sessions.begin() as session:
+        rows = [
+            Message(conversation_id=cid, turn_id='legacy-good', event_key='fixture:0',
+                    role='user', content='旧问题', turn_status='completed'),
+            Message(conversation_id=cid, turn_id='legacy-good', event_key='fixture:1',
+                    role='assistant', content='旧答案', turn_status='completed'),
+            Message(conversation_id=cid, turn_id='legacy-incomplete', event_key='fixture:2',
+                    role='user', content='收到的商品有破损，请帮我联系人工客服。', turn_status='completed'),
+        ]
+        if incomplete == 'orphan_tool':
+            rows.append(Message(conversation_id=cid, turn_id='legacy-incomplete',
+                event_key='fixture:3', role='tool', content='旧孤立结果',
+                tool_call_id='legacy-orphan', turn_status='completed'))
+        session.add_all(rows)
+        await session.flush()
+        for row in rows:
+            row.event_key = f'legacy:{row.id}'
+
+
+async def raw_audit(mysql_db, cid):
+    """Include provenance omitted by the public audit wire in immutability checks."""
+    from sqlalchemy import select
+    from app.db.models import Message
+    async with mysql_db.sessions() as session:
+        return list((await session.execute(select(*Message.__table__.columns).where(
+            Message.conversation_id == cid).order_by(Message.id))).all())
+
+
+@pytest.mark.parametrize('incomplete', ['user_only', 'orphan_tool'])
+async def test_legacy_incomplete_audit_is_preserved_across_workflow_restart(
+        mysql_db, checkpoint_settings, incomplete):
+    from app.workflow.recovery import recover_conversation
+    async with service_case(mysql_db, checkpoint_settings) as (service, graph, repo, recorder, *_):
+        cid = await create_session(repo)
+        await insert_migrated_history(mysql_db, cid, incomplete=incomplete)
+        original = await raw_audit(mysql_db, cid)
+        # get_turn remains strict; only recovery may project proven legacy audit.
+        with pytest.raises(ServiceError) as error:
+            await repo.get_turn(TurnRef(cid, 'legacy-incomplete'), 'demo')
+        assert error.value.code == 'TURN_INVALID'
+        history = await recover_conversation(graph, repo, cid, 'demo')
+        assert [turn['turn_id'] for turn in history] == ['legacy-good']
+        assert [m['content'] for m in history[0]['messages']] == ['旧问题', '旧答案']
+        assert recorder.model_calls == recorder.tool_calls == 0
+        assert await raw_audit(mysql_db, cid) == original
+        first, events = await run_turn(service, cid)
+        assert events[-1].name == 'done'
+        assert [t['turn_id'] for t in first.initial_state['history']] == ['legacy-good']
+    async with service_case(mysql_db, checkpoint_settings) as (service, graph, repo, recorder, *_):
+        second, events = await run_turn(service, cid, '继续')
+        assert events[-1].name == 'done'
+        assert [t['turn_id'] for t in second.initial_state['history']] == ['legacy-good', first.ref.turn_id]
+        history = await recover_conversation(graph, repo, cid, 'demo')
+        assert [t['turn_id'] for t in history] == ['legacy-good', first.ref.turn_id, second.ref.turn_id]
+        assert (await raw_audit(mysql_db, cid))[:len(original)] == original
+        assert recorder.model_calls == 1 and recorder.tool_calls == 0
+
+
+@pytest.mark.parametrize('corruption', [
+    'spoofed_id', 'mixed_events', 'mixed_status', 'unexpected_metadata',
+    'empty_metadata', 'current_user_only', 'current_malformed_calls',
+])
+async def test_legacy_projection_does_not_hide_current_or_unproven_corruption(
+        mysql_db, checkpoint_settings, corruption):
+    from sqlalchemy import select
+    from app.db.models import Message
+    async with service_case(mysql_db, checkpoint_settings, intents=()) as (service, graph, repo, recorder, *_):
+        cid = await create_session(repo)
+        await insert_migrated_history(mysql_db, cid, incomplete='orphan_tool')
+        async with mysql_db.sessions.begin() as session:
+            rows = list((await session.scalars(select(Message).where(
+                Message.conversation_id == cid, Message.turn_id == 'legacy-incomplete'
+            ).order_by(Message.id))).all())
+            if corruption == 'spoofed_id':
+                rows[0].event_key = f'legacy:{rows[0].id + 1000}'
+            elif corruption == 'mixed_events':
+                rows[1].event_key = 'result:0'
+            elif corruption == 'mixed_status':
+                rows[1].turn_status = 'pending'
+            elif corruption in ('unexpected_metadata', 'empty_metadata'):
+                rows[0].event_data = {'unexpected': True} if corruption == 'unexpected_metadata' else {}
+            else:
+                rows[0].event_key = 'user'
+                if corruption == 'current_user_only':
+                    await session.delete(rows[1])
+                else:
+                    rows[1].event_key = 'call:0'
+                    rows[1].role = 'assistant'
+                    rows[1].tool_calls = ['malformed']
+        original = await raw_audit(mysql_db, cid)
+        config = {'configurable': {'thread_id': cid}}
+        before = await graph.aget_state(config)
+        with pytest.raises(ServiceError) as error:
+            async with service.prepare('不得启动', cid):
+                pass
+        assert error.value.code == 'TURN_INVALID'
+        assert await raw_audit(mysql_db, cid) == original
+        after = await graph.aget_state(config)
+        assert after.config == before.config and after.values == before.values
+        assert recorder.model_calls == recorder.tool_calls == 0
+
+
+@pytest.mark.parametrize('reference', ['history', 'current'])
+async def test_checkpoint_reference_to_excluded_legacy_turn_remains_conflict(
+        mysql_db, checkpoint_settings, reference):
+    from copy import deepcopy
+    async with service_case(mysql_db, checkpoint_settings) as (service, graph, repo, recorder, *_):
+        cid = await create_session(repo)
+        completed, events = await run_turn(service, cid)
+        assert events[-1].name == 'done'
+        await insert_migrated_history(mysql_db, cid)
+        config = {'configurable': {'thread_id': cid}}
+        state = deepcopy((await graph.aget_state(config)).values)
+        if reference == 'history':
+            # Structurally valid forged checkpoint history still has no audit authority.
+            forged = deepcopy(state['history'][0])
+            forged['turn_id'] = 'legacy-incomplete'
+            state['history'].insert(0, forged)
+        else:
+            state['turn_id'] = 'legacy-incomplete'
+        await graph.aupdate_state(config, state, as_node='persist')
+        before = await graph.aget_state(config)
+        original = await raw_audit(mysql_db, cid)
+        calls = recorder.model_calls, recorder.tool_calls
+        with pytest.raises(ServiceError) as error:
+            async with service.prepare('不得启动', cid):
+                pass
+        assert error.value.code == 'WORKFLOW_RECOVERY_CONFLICT'
+        after = await graph.aget_state(config)
+        assert after.config == before.config and after.values == before.values
+        assert await raw_audit(mysql_db, cid) == original
+        assert (recorder.model_calls, recorder.tool_calls) == calls

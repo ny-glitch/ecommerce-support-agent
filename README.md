@@ -245,4 +245,4 @@ HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 .venv/bin/python -m pytest --require-mys
 
 评估说明与人工标注复核见 [dev-notes/ch05-evaluation.md](dev-notes/ch05-evaluation.md)，阶段证据见 [dev-notes/ch05.md](dev-notes/ch05.md)。真实报告预定为 `evals/reports/ch05/{intents,evidence,assessor}/report.md`；目前尚未生成，不能引用 fixture 统计替代真实质量。
 
-2026-09-21 本地验证记录：新增评估/演示及第 4 章评估回归 69 passed；完整 required suite 在真实隔离依赖下为 782 passed、4 个遗留 schema fixture 失败、1 条既有 Starlette warning，随后只修两个旧测试文件并用真实 MySQL 复跑 10 passed，覆盖全部四个失败。该组合覆盖本次收集的 786 项；没有把它写成第二次全量全绿。`pip check` 通过，wheel 含 11 份 Prompt，新模块导入无网络连接。这些是本地代码/依赖证据，真实模型质量仍待授权与实际运行。
+2026-09-21 本地验证记录：新增评估/演示及第 4 章评估回归 69 passed；完整 required suite 在真实隔离依赖下为 782 passed、4 个遗留 schema fixture 失败、1 条既有 Starlette warning（80.91 秒）。随后只修两个旧测试文件，真实 MySQL 复跑 10 passed（0.30 秒），覆盖全部四个失败。其后生产评估器修复 `00c7ad6` 的完整评估器文件验证为 25 passed（1.83 秒）；最终评审的旧审计兼容修复在真实隔离 MySQL 13307/PostgreSQL 15433、脚本模型下完成恢复/仓储/服务受影响文件验证，84 passed（8.87 秒）。该修复只排除有确切迁移标记、全行 completed 且结构不完整的旧审计，保留当前损坏与检查点引用冲突的严格拒绝。没有后续全量全绿运行，不能将这些分阶段证据表述为最终版本的全套通过。此前 `pip check`、含 11 份 Prompt 的 wheel 及新模块零网络导入检查通过；两次生产修复之后未重建 wheel，旧构建结果只对应当时版本。真实模型质量、实际浏览器验收、演示库迁移/切换及最终集成仍待各自门槛完成。

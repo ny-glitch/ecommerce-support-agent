@@ -78,8 +78,11 @@ async def recover_conversation(graph, conversations, conversation_id, user_id) -
     config = {'configurable': {'thread_id': conversation_id}, 'recursion_limit': 64}
     snapshot = await graph.aget_state(config)
     rows = await conversations.audit(conversation_id, user_id)
+    audit_only = await conversations.legacy_audit_only_turn_ids(conversation_id, user_id)
     turns = {}
     for turn_id in dict.fromkeys(row['turn_id'] for row in rows):
+        if turn_id in audit_only:
+            continue
         turn = await conversations.get_turn(TurnRef(conversation_id, turn_id), user_id)
         if turn is None:
             raise recovery_conflict()

@@ -257,6 +257,31 @@ class ConversationRepository:
             return TurnSnapshot(ref, rows[0].content, rows[0].turn_status,
                 final.content if final else None, final.event_data if final else None, messages)
 
+    async def legacy_audit_only_turn_ids(self, conversation_id: str, user_id: str) -> set[str]:
+        """Project incomplete migrated audit without relaxing strict turn reads.
+
+        Only exact migration keys on every row, absent event metadata and a
+        uniform completed status prove eligibility. Current/mixed records must
+        still pass get_turn; checkpoint references remain recovery conflicts.
+        """
+        async with self._sessions.begin() as session:
+            owner = await session.get(Conversation, conversation_id)
+            if owner is None or owner.id != conversation_id or owner.user_id != user_id:
+                return set()
+            rows = (await session.scalars(select(Message).where(
+                Message.conversation_id == conversation_id).order_by(Message.id))).all()
+            grouped: dict[str, list[Message]] = {}
+            for row in rows:
+                grouped.setdefault(row.turn_id, []).append(row)
+            return {
+                turn_id for turn_id, turn_rows in grouped.items()
+                if all(row.conversation_id == conversation_id
+                       and row.turn_status == 'completed'
+                       and row.event_key == f'legacy:{row.id}'
+                       and row.event_data is None for row in turn_rows)
+                and _restore_complete_turn(turn_rows) is None
+            }
+
     async def unfinished_turns(self, conversation_id: str, user_id: str) -> list[TurnSnapshot]:
         audit = await self.audit(conversation_id, user_id)
         ids = dict.fromkeys(row['turn_id'] for row in audit if row['turn_status'] == 'pending')
