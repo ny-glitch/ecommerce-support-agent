@@ -234,7 +234,7 @@ if existing is not None:
 
 ### Task 4: 一次意图识别与 Agent 控制协议
 
-**Files:** Create `app/workflow/gateway.py`、`app/workflow/prompts.py`、`app/prompts/workflow_intent.txt`、`app/prompts/workflow_agent.txt`、`app/prompts/workflow_answer.txt`、`app/prompts/workflow_evidence.txt`、`evals/ch05/intents.jsonl`、`tests/test_workflow_gateway.py`、`dev-notes/ch05-evaluation.md`；Modify `app/model.py`（共享模型工厂）、`app/knowledge/gateway.py`（共用 assessment 校验与请求钩子）、`app/knowledge/query.py`（预算错误不能降级吞掉）。
+**Files:** Create `app/workflow/gateway.py`、`app/workflow/prompts.py`、`app/prompts/workflow_intent.txt`、`app/prompts/workflow_agent.txt`、`app/prompts/workflow_answer.txt`、`app/prompts/workflow_evidence.txt`、`evals/ch05/intents.jsonl`、`tests/test_workflow_gateway.py`、`dev-notes/ch05-evaluation.md`；Modify `app/model.py`（共享模型工厂）、`app/knowledge/gateway.py`（共用 assessment 校验与请求钩子）、`app/knowledge/query.py`（预算错误不能降级吞掉）、`tests/test_model.py`、`tests/test_knowledge_query.py`、`tests/test_knowledge_evidence.py`、`tests/test_knowledge_evaluation.py`（共享工厂、预算传播、assessment 与既有诊断的必要回归）。
 
 **Interfaces:** `WorkflowGateway(model,settings,*,chat_extra_body,before_request,record_usage)`；`classify(messages)->IntentResult`；`decide(messages,tools)->AIMessage|FinalControl`；`assess(question,sources,*,normalized_question,intent:IntentResult)->EvidenceAssessment`；`stream_final(messages)->AsyncIterator[str]`。before_request(stage,messages,tool_schemas) 在真实调用前 reserve；record_usage(stage,usage) 只接受非敏感计数字段。`OpenAIModelGateway.create_workflow_gateway(before_request,record_usage)` 共享已有 ChatOpenAI/HTTP owner，不新建连接或私自改 `.env`。
 
@@ -264,6 +264,8 @@ if reply.tool_calls:
     return reply
 return FinalControl.model_validate_json(str(reply.content))
 ```
+
+- 参数校验边界：网关校验 native JSON 协议、白名单和单调用；业务参数 Schema 由既有 ToolExecutor 在业务 ainvoke 前校验，失败产出 INVALID_TOOL_ARGUMENTS 回灌 Agent，不改成网关终止。增加缺参、额外字段、错误类型的网关→执行器回归，证明业务零调用；Task 6 验证失败结果回灌。
 
 - [ ] 四份模板用 PromptTemplate：intent 定义七类与复合问题；agent 规定缺参追问、事实只来自证据/工具、允许动作只是建议；answer 禁止到账/送达/已执行承诺并要求知识引用；evidence 在 needs_business_data=true 时只核实相关政策/静态知识是否足以指导后续查询，不要求知识库包含订单实时事实。仍禁止政策缺失时交 Agent 猜测。
 - [ ] 将 assessment 原有结构/支持 ID 验证提为 `validate_assessment(value:EvidenceAssessment, sources:Sequence[Citation])->EvidenceAssessment`，原网关和新网关共用，不改旧 JSON 合同。KnowledgeGateway 和 `create_knowledge_gateway` 新增可选 before_request/record_usage 关键字钩子，默认空；normalize 构造好完整请求后才调用钩子。预算超限由 QueryNormalizer 显式传播，不能当普通改写失败吞掉；可用 usage 记录到本轮预算，没有 usage 保留预留额。
@@ -452,7 +454,7 @@ snapshot = await graph.aget_state(config)
 **Interfaces:** `KnowledgeComponents(repository,store,local_models,retriever,low_confidence,knowledge_gateway_factory)`；`build_knowledge_components(settings,database,model_gateway,owned_resources)->KnowledgeComponents` 公开复用现有非创建校验/预热。`build_workflow_dependencies(settings,database,model_gateway,components)->WorkflowDependencies`。`create_app` 保留显式 chat_service/knowledge_dependencies 测试注入，增加显式 workflow_dependencies；正常无注入启动必须使用 WorkflowChatService，不在失败时回落旧聊天实现。
 
 - [ ] RED 缺 PG 配置/表、缺 MySQL 迁移列、无来源数据、模型 manifest 错误均启动失败并正确逆序关闭；已注入服务不隐式创建生产资源；初始化任一步取消也要一次性排空关闭。
-- [ ] `.venv/bin/python -m pytest tests/integration/test_workflow_startup.py -q` RED；从原 `_production_knowledge_dependencies` 提取共享 KnowledgeComponents。保留旧流水线的 calibration 读取与校验供旧四策略评估使用；新图使用已批准的 0.7/0.8，不伪造或把旧 calibration 当新策略凭证。新图仍验证 corpus、固定模型 manifest、Milvus schema 和本章评估状态。
+- [ ] `.venv/bin/python -m pytest tests/integration/test_workflow_startup.py -q` RED；从原 `_production_knowledge_dependencies` 提取共享 KnowledgeComponents。保留旧流水线的 calibration 读取与校验供旧四策略评估使用；新图使用已批准的 0.7/0.8，不伪造或把旧 calibration 当新策略凭证。新图启动仍验证 corpus、固定模型 manifest 和 Milvus schema；本章评估状态由 Task 12 的发布/切换门槛核对，不新增未定义的运行时评估文件依赖，未真实验收不得切换 8001。
 
 ```python
 components = await build_knowledge_components(settings,database,gateway,owned_resources)
