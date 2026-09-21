@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 from app.db.contracts import StoredTurn, TurnRef
 from app.errors import ServiceError
-from app.workflow.state import dump_turns, fresh_state, load_tool_messages, load_turns
+from app.workflow.state import dump_tool_messages, dump_turns, fresh_state, load_tool_messages, load_turns
 
 
 _METADATA_FIELDS = ('intent', 'route', 'score', 'band', 'assessment', 'sources',
@@ -120,25 +120,37 @@ async def recover_conversation(graph, conversations, conversation_id, user_id) -
                     # Check durable pre-persist business output before repairing
                     # checkpoint acknowledgement loss from committed audit.
                     if (state['original_question'] != current.original_question
-                            or (state.get('answer') is not None and state['answer'] != current.final_content)):
+                            or state['answer'] != current.final_content):
                         raise recovery_conflict()
                     wire = _audit_history(current)[0]['messages']
-                    partial = state.get('tool_messages', [])
-                    load_tool_messages(partial)
+                    settled = state['tool_messages']
                     expected = wire[1:-1]
                     def business(messages):
+                        canonical = dump_tool_messages(load_tool_messages(messages))
                         return [{k: v for k, v in m.items() if k not in ('name', 'status')}
-                                for m in messages]
-                    if business(partial) != business(expected[:len(partial)]):
+                                for m in canonical]
+                    # Persist cannot create a missing call/result pair. Compare
+                    # the complete settled sequence, ignoring only LC defaults.
+                    if business(settled) != business(expected):
                         raise recovery_conflict()
                     metadata = current.event_data or {}
                     if (any(key not in metadata for key in _METADATA_FIELDS)
                             or any(state[key] != metadata[key] for key in _METADATA_FIELDS
                                    if key not in {'offers', 'budget'})):
                         raise recovery_conflict()
-                    tool_trace = iter(metadata['tools'])
-                    repaired_trace = [{'stage': stage, **(next(tool_trace) if stage == 'tool' else {})}
-                                      for stage in metadata['node_path']]
+                    repaired_trace = deepcopy(state['trace'])
+                    if state['status'] != 'completed':
+                        node_path = metadata['node_path']
+                        tools = [{key: item.get(key)
+                                  for key in ('name', 'tool_call_id', 'status', 'attempts')}
+                                 for item in repaired_trace if item.get('stage') == 'tool']
+                        # The only legitimate trace change inside persist is its
+                        # final stage. Validate durable input before adding it.
+                        if (not node_path or node_path[-1] != 'persist'
+                                or [item.get('stage') for item in repaired_trace] != node_path[:-1]
+                                or tools != metadata['tools']):
+                            raise recovery_conflict()
+                        repaired_trace.append({'stage': 'persist', 'status': 'completed'})
                     repaired = {**state, 'trace': repaired_trace, **{k: deepcopy(metadata[k]) for k in _METADATA_FIELDS},
                         'answer': current.final_content, 'status': 'completed',
                         'history': history if current.ref.turn_id in prior_ids else history + _audit_history(current)}

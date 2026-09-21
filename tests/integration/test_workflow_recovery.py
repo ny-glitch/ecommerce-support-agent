@@ -377,3 +377,54 @@ async def test_actual_knowledge_child_entry_precedes_final_token(mysql_db, check
                      if event.name == 'workflow_status' and event.data['node'] == 'agent')
         assert names.index('sources') < entry < names.index('token')
         assert events[-1].name == 'done' and events[-1].data['citations'] == [1]
+
+
+@pytest.mark.parametrize('conflict', ['empty_tools', 'prefix_tools', 'node_path', 'tool_summary', 'missing_answer'])
+async def test_pending_repair_rejects_missing_pairs_and_conflicting_trace_without_mutation(
+        mysql_db, checkpoint_settings, conflict):
+    from copy import deepcopy
+    calls = tuple(AIMessage('', tool_calls=[{
+        'name': 'query_order', 'id': f'call-{index}', 'args': {'order_id': f'O{index}'},
+    }]) for index in (1, 2))
+    async with service_case(mysql_db, checkpoint_settings, intents=('order',),
+            decisions=(*calls, FinalControl(kind='respond')), tokens=('已完成核对。',)) as (
+            service, graph, repo, recorder, *_):
+        cid = await create_session(repo)
+        completed, events = await run_turn(service, cid, '查询两个订单')
+        assert events[-1].name == 'done'
+        config = {'configurable': {'thread_id': cid}}
+        state = deepcopy((await graph.aget_state(config)).values)
+        assert len(state['tool_messages']) == 4
+        assert state['trace'][-1] == {'stage': 'persist', 'status': 'completed'}
+        # Persist only appends its own trace stage and current history. Restore
+        # the actual settled pre-persist shape, then corrupt one immutable field.
+        state.update(status='pending', history=[], offers=[])
+        state['trace'] = state['trace'][:-1]
+        if conflict == 'empty_tools':
+            state['tool_messages'] = []
+        elif conflict == 'prefix_tools':
+            state['tool_messages'] = state['tool_messages'][:2]
+        elif conflict == 'node_path':
+            state['trace'][0]['stage'] = 'unexpected_stage'
+        elif conflict == 'missing_answer':
+            state['answer'] = None
+        else:
+            tool_trace = next(item for item in state['trace'] if item['stage'] == 'tool')
+            tool_trace['attempts'] += 1
+        await graph.aupdate_state(config, state, as_node='agent')
+        before = await graph.aget_state(config)
+        gold = await repo.get_turn(completed.ref, 'demo')
+        audit_before = await repo.audit(cid, 'demo')
+        model_calls, tool_calls = recorder.model_calls, recorder.tool_calls
+        assert before.next == ('persist',) and gold.status == 'completed'
+
+        with pytest.raises(ServiceError) as error:
+            async with service.prepare('新问题不得开始', cid):
+                pass
+
+        assert error.value.code == 'WORKFLOW_RECOVERY_CONFLICT'
+        after = await graph.aget_state(config)
+        assert after.config == before.config and after.values == before.values
+        assert await repo.get_turn(completed.ref, 'demo') == gold
+        assert await repo.audit(cid, 'demo') == audit_before
+        assert recorder.model_calls == model_calls and recorder.tool_calls == tool_calls
