@@ -1,22 +1,28 @@
 # Current status — 2026-09-22
 
-Implementation and scoped backend reviews are complete at `d2b8799`. The final required local suite is **807 passed, 1 known deprecation warning (84.32 s)**, using real isolated MySQL, PostgreSQL, Milvus and cached local models. Real-model acceptance is **not complete**; results below include failures.
+Backend implementation and its scoped reviews are complete at `d2b8799`; Agent control candidate `45ca47a` completed its frozen v3 run with no control-protocol failures; answer-only citation clarification `3cc14e4` passed three targeted answer probes and actual browser multi-step validation, followed by independent scoped approval. The backend required suite at `d2b8799` is **807 passed, 1 known deprecation warning (84.32 s)**, using real isolated MySQL, PostgreSQL, Milvus and cached local models. Final Prompt budget/gateway regression at `3cc14e4` is **42 passed (2.04 s)**. Functional browser acceptance and cutover are complete; the formal model reports below retain their failures and do not constitute a full-corpus zero-error pass.
 
-The user authorized demonstration questions, necessary knowledge, simulated tool results and generated answers to DeepSeek (`api.deepseek.com`). The actual configured model is `deepseek-flash`, thinking disabled, with zero automatic retries. A later, separate three-case Agent-control diagnostic was rejected by automatic approval review before process creation; a specific follow-up authorization question is pending. Zero requests from that diagnostic were sent. Original failed replies were not retained, so their cause remains unproved.
+The user authorized demonstration questions, necessary knowledge, simulated tool results and generated answers to DeepSeek (`api.deepseek.com`). The actual configured model is `deepseek-flash`, thinking disabled, with zero automatic retries. A later, separate three-case Agent-control diagnostic was rejected by automatic approval review before process creation; the user then explicitly authorized it and exactly three requests completed (3,066 provider tokens). The old control error did not recur; one native call proposed an invalid $ORDER_ID placeholder and therefore does not establish end-to-end success. Original failed replies were not retained, so their cause remains unproved.
 
 | Actual run | Coverage and execution status | Selected measured results |
 | --- | --- | --- |
 | `evals/reports/ch05/2026-09-22-intents` | 35/35 attempted, incomplete; 4 technical failures | Classification and route 31/35 (88.57%); business flag 29/35; business-to-knowledge misroutes 0/15. 90 calls / 67,017 provider tokens. |
+| `evals/reports/ch05/2026-09-22-intents-v2` | 35/35 attempted, incomplete; 2 technical failures | Classification and route 33/35 (94.29%); business flag 31/35; business-to-knowledge misroutes 0/15. 96 calls / 74,202 provider tokens. |
+| `evals/reports/ch05/2026-09-22-intents-v3` | 35/35 attempted, incomplete; 2 final-answer citation failures | Classification and route 33/35; business flag 31/35; business-to-knowledge misroutes 0/15. 92 calls / 65,776 provider tokens. |
 | `evals/reports/ch05/2026-09-22-evidence` | 12/12, complete; zero technical failures | Classification, route and sufficiency 12/12; refusal 3/3; business flag 11/12; exact support IDs 10/12; exact citation IDs 7/9. 43 calls / 45,250 tokens. |
 | `evals/reports/ch05/2026-09-22-assessor` | 2/2, complete | Both injection/conflicting-source cases correctly insufficient with no supporting IDs. 2 calls / 1,437 tokens. |
 
-Total for these three runs: **135 calls / 113,704 provider tokens**. `complete` means execution coverage, not perfect answer quality. Structural ID metrics do not prove semantic faithfulness. Fixed labels were not edited to improve scores.
+Total for these five formal runs: **323 calls / 253,682 provider tokens** (the separate diagnostic is excluded). `complete` means execution coverage, not perfect answer quality. Structural ID metrics do not prove semantic faithfulness. Fixed labels were not edited to improve scores.
 
-`intent-009`, `intent-010` and `intent-022` failed with `AGENT_CONTROL_ERROR`; `intent-016` reached its conservative input-token guard and returned the bounded fallback, but is still counted as an evaluation failure (`INPUT_TOO_LONG`). Cases 009/010/022 remain awaiting the blocked diagnostic. The successful control probes in separate work do not replace these failures.
+`intent-009`, `intent-010` and `intent-022` failed with `AGENT_CONTROL_ERROR`; `intent-016` reached its conservative input-token guard and returned the bounded fallback, but is still counted as an evaluation failure (`INPUT_TOO_LONG`). The original failures in cases 009/010/022 remain retained; the separate three-request diagnostic did not reproduce their error. The successful control probes in separate work do not replace these failures.
 
-Actual browser checks on isolated port 8002 have verified policy retrieval/clickable source text, unknown refusal and a low-confidence pool row, complaint actions without automatic execution, cancellation before ticket creation, one confirmed ticket, repeated confirmation before/after graceful restart without duplicates, front-end feedback locking, and the logistics tool badge. The policy save conflict observed earlier was fixed and passed a fresh browser re-test. PostgreSQL retained the completed policy checkpoint after restart. Multi-step browsing, formal quality gates, the final 8001 cutover and finish remain separate pending work. Artifacts: `evals/reports/ch05/2026-09-22-acceptance/`.
+The v2 intent run has raw observations: 002 returned prose followed by JSON, and 023 returned only prose, so strict control parsing rejected both. Case 009 reached a valid final clarification only after its placeholder tool argument was blocked; its formal passing grade does not close the missing-argument Prompt quality gap. Cases 010, 016 and 022 did not repeat their earlier technical failures. The second bounded Agent Prompt candidate `45ca47a` then passed all control-protocol checks in v3: 002/009/023 clarified directly without tool proposals. Cases 005/010 failed later when final generation invented [1] despite sources=[]; the strict citation validator correctly rejected them. This is not proof that the Agent Prompt caused the separate answer-stage error. A bounded answer-only clarification is committed as `3cc14e4`; no parser, label, budget or business-tool change was made. Case 016 took insufficient-evidence fallback in v3, so this does not revalidate its earlier budget path.
 
-The sections below retain the earlier local-only chronology and dataset rationale. Their pending-authorization and not-yet-run statements describe those earlier stages, not the current status above.
+Actual browser checks on isolated port 8002 have verified policy retrieval/clickable source text, unknown refusal and a low-confidence pool row, complaint actions without automatic execution, cancellation before ticket creation, one confirmed ticket, repeated confirmation before/after graceful restart without duplicates, front-end feedback locking, and the logistics tool badge. The policy save conflict observed earlier was fixed and passed a fresh browser re-test. PostgreSQL retained the completed policy checkpoint after restart. Subsequent real browser multi-step execution completed query_order then query_logistics, three Agent decisions, validated answering and MySQL/PostgreSQL persistence. New-message recovery in the old failed session also completed. The new single-worker service now runs on 8001; 8002 is stopped. Final branch integration still requires the user’s choice. Artifacts: `evals/reports/ch05/2026-09-22-acceptance/`.
+
+The first attempt to start the three-answer check was rejected before sending any request. After the user explicitly confirmed the exact demo payload and DeepSeek destination, the same frozen harness completed once: three requests / 2,430 provider tokens, strict citation and independent factual review 3/3 passed. This separate check does not change the formal 35-case result or the five-run totals. The two Prompt tasks subsequently received scoped quality approval with a minor timestamp presentation limitation (UTC omitted in one answer).
+
+The sections below retain the earlier local-only chronology and dataset rationale. Their pending-authorization and not-yet-run statements describe those earlier stages, not the current status above. Final artifacts are in `2026-09-22-answer-citations/` and `2026-09-22-acceptance/`; the demo migration preserved all 67 original messages and both original tickets before the final two chat checks.
 
 # Chapter 5 intent evaluation status
 
@@ -86,7 +92,7 @@ The review applies these rules: greetings do not override a business request; ex
 | intent-034 | chitchat | no | Non-business conversational request. |
 | intent-035 | chitchat | no | Non-business small talk. |
 
-All 35 rows were checked for the exact five-field shape (`id`, `question`, `history`, `expected_intent`, `needs_business_data`), valid strict DTO values, unique IDs, and five cases per label. This is a human label review, not a review of model predictions.
+All 35 rows were checked for the exact five-field shape (`id`, `question`, `history`, `expected_intent`, `needs_business_data`), valid strict DTO values, unique IDs, and five cases per label. This is an assistant review of reference labels, not a human gold-standard review or a review of model predictions.
 
 ## Evidence and routing labels — corrected corpus-grounded set
 
@@ -142,3 +148,17 @@ Local verification results: evaluator/demo + Chapter 4 evaluator regression **69
 ## Fresh final required-suite result — 2026-09-22
 
 On `d2b8799`, the required suite with all four database/Milvus/local-model flags completed with **807 passed, 1 existing Starlette/AnyIO deprecation warning in 84.32 seconds (exit 0)**. This is a new full run after the historical stale-fixture corrections, evaluator/recovery fixes, Prompt namespace fix and score-roundtrip fix. The raw output is `evals/reports/ch05/2026-09-22-validation/pytest-required.txt`. It supersedes the prior absence of a later all-green full test run; that earlier chronology remains below as history. No new wheel build is claimed, and real model/browser gates are separate.
+
+
+### 2026-09-22 · Agent Prompt 第一候选真实复验结束，进入第二次有界修正
+- 用户关键原话：“缺信息就追问用户”“允许”；沿用已批准的演示评估授权，不重跑已完成的三次专门诊断。
+- 关键产出：`evals/reports/ch05/2026-09-22-intents-v2/` 已跑 35/35，执行状态 incomplete；分类/路由 33/35，业务数据标记 31/35，96 次模型调用、74,202 provider tokens。原 010 已实际完成订单→物流两步；原 016 预算错误及 022 控制格式错本轮未复现。
+- 拒绝或纠偏：不能把最终追问或 formal grade=true 等同于没有无效工具申请。009 先申请 order_id="?"，Schema 阻止实际业务函数，随后 clarify；缺参直接追问的候选目标未达到。002 输出解释文字+JSON，023 只输出追问文字，严格控制协议拒绝均有原始观测为证。
+- 翻车与返工：第一候选 b5ac0e1 的 25 项本地测试不证明 Prompt 质量。保留所有失败，不改解析器、标签或预算；第二次修正只强化控制层身份及无工具时整条消息仅为 JSON，泛化缺参分支。四策略比较使用独立知识 Prompt 与已完成校准，可并行继续。
+
+
+### 2026-09-22 · 第三轮 35 条执行结束及引用错误定位
+- 用户关键原话：“缺信息就追问用户”“回答带引用编号，编号能映射回来源 chunk”。
+- 关键产出：`2026-09-22-intents-v3` 在 45ca47a 上 35/35 尝试，92 次调用/65,776 provider tokens。原 002/009/023 均直接 clarify、没有工具申请，Agent 控制格式错误本轮为零；整体仍 incomplete，005/010 因最终引用错误失败，分类/路由计分 33/35、业务标记 31/35。
+- 拒绝或纠偏：005/010 的 sources=[]，合法工具执行后生成却加 [1]，严格未知编号校验正确拒绝。不能归因于新增 Agent Prompt，因为最终回答 Prompt 未修改且无因果对照；不能放宽校验或伪造来源。016 本轮走证据不足兜底，未复验原预算路径。
+- 翻车与返工：安排仅 `workflow_answer.txt` 的简短编号命名空间澄清，以两条无知识源业务回答加一条有知识源正例做固定生成验证，并验真实页面多步。不重跑整套 35/240 刷绿；保留完整基线失败，定向样例绝不冒充全量通过。

@@ -91,7 +91,7 @@ docker compose up -d --wait db
   --host 127.0.0.1 --port 8002 --workers 1
 ```
 
-打开 `http://127.0.0.1:8002/` 可使用网页聊天、停止回复、新对话及售后提取。聊天的并发 guard 在进程内，因此必须使用单 worker。现有 8001 预览只在本章真实验收通过后切换；不要占用其他项目的 8000。
+打开 `http://127.0.0.1:8002/` 可使用网页聊天、停止回复、新对话及售后提取。聊天的并发 guard 在进程内，因此必须使用单 worker。本次演示已于 2026-09-22 验收并切换到 8001；上述 8002 用于以后版本的独立验收。不要占用其他项目的 8000。
 
 会话、完整消息审计和工单持久化到 MySQL，服务重启后仍可恢复。只有 `completed` 的完整轮次会回灌给模型；失败、取消或结构不完整的轮次保留作审计，但不进入后续模型上下文。`MAX_HISTORY_TURNS` 限制回灌的最近完整轮次数。进程内 guard 只负责同会话互斥和活动请求容量，所以多 worker 会绕过这项约束。
 
@@ -199,7 +199,7 @@ docker compose --profile test up -d --wait test-db
 
 ## 第 5 章 Workflow 评估与交付
 
-第 5 章默认后端使用固定 Workflow：一次分类、知识检索/三级分档/证据闸、只读业务 Agent、独立人工建议与工单确认。用户已于 2026-09-22 明确允许向 DeepSeek 发送约定的演示数据，**真实质量评估、浏览器验收和服务切换正在进行，尚未完成**。旧 8001 保留；临时验收使用 8002，不占用其他项目的 8000。
+第 5 章默认后端使用固定 Workflow：一次分类、知识检索/三级分档/证据闸、只读业务 Agent、独立人工建议与工单确认。用户已于 2026-09-22 明确允许向 DeepSeek 发送约定的演示数据。**实现、限定修复评审与本地页面验收已完成，新版运行于 http://127.0.0.1:8001/**；临时 8002 已关闭，8000 未动。正式模型评估保留失败记录，不能把功能验收解释为全量质量零错。分支尚未合并或推送。
 
 本地帮助不读取模型配置或发请求：
 
@@ -222,16 +222,16 @@ Workflow scope 只给 runner 传 `question/history/category`，复用实际检�
 
 每个输出目录包含 `manifest.json`、`results.jsonl`、`report.md` 与原子逐条缓存 `.results/`。指纹覆盖实际输入/真值、有效配置、0.7/0.8 阈值、Prompt、代码、依赖和知识/模型身份；不同配置或 invalid 目录不能续跑。已保存的失败不自动重试；重测使用新目录。`complete` 只表示全部计划样本执行完毕，准确率、误路由、支持/拒答/引用失败仍须查看具体失败行；`smoke/partial/incomplete/invalid` 都不能宣布正式评估完成。失败保留在分母内；实际分数分档；缺失 token 用量保留 null，预算预留量不是供应商计费 token。
 
-在独立 8002 上完成真实后端与数据准备、且有发送许可之后运行全部演示：
+本次切换后的演示服务使用 8001；下列命令会发出模型请求。投诉默认不建单，只有显式确认命令会写入工单：
 
 ```bash
-.venv/bin/python scripts/demo_workflow.py --base-url http://127.0.0.1:8002 --scenario policy
-.venv/bin/python scripts/demo_workflow.py --base-url http://127.0.0.1:8002 --scenario logistics
-.venv/bin/python scripts/demo_workflow.py --base-url http://127.0.0.1:8002 --scenario complaint
-.venv/bin/python scripts/demo_workflow.py --base-url http://127.0.0.1:8002 --scenario complaint --confirm-ticket
-.venv/bin/python scripts/demo_workflow.py --base-url http://127.0.0.1:8002 --scenario chitchat
-.venv/bin/python scripts/demo_workflow.py --base-url http://127.0.0.1:8002 --scenario multi_step
-.venv/bin/python scripts/demo_workflow.py --base-url http://127.0.0.1:8002 --scenario unknown
+.venv/bin/python scripts/demo_workflow.py --base-url http://127.0.0.1:8001 --scenario policy
+.venv/bin/python scripts/demo_workflow.py --base-url http://127.0.0.1:8001 --scenario logistics
+.venv/bin/python scripts/demo_workflow.py --base-url http://127.0.0.1:8001 --scenario complaint
+.venv/bin/python scripts/demo_workflow.py --base-url http://127.0.0.1:8001 --scenario complaint --confirm-ticket
+.venv/bin/python scripts/demo_workflow.py --base-url http://127.0.0.1:8001 --scenario chitchat
+.venv/bin/python scripts/demo_workflow.py --base-url http://127.0.0.1:8001 --scenario multi_step
+.venv/bin/python scripts/demo_workflow.py --base-url http://127.0.0.1:8001 --scenario unknown
 ```
 
 脚本要求实际 SSE `done`；HTTP 200、部分文本或 EOF 都不算成功。来源从真实 source ID/hash 构造同源固定路径并校验响应，不访问模型提供的任意 URL，不跟随重定向。投诉默认只展示建议；只有 `--confirm-ticket` 才对当前真实 action 发两次空 JSON `{}`，校验相同工单编号。业务工具仍返回原有随机演示数据；多步演示可能合理提前结束，需如实记录并另选可继续查询的真实结果，不改造返回数据。
@@ -243,12 +243,20 @@ HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 .venv/bin/python -m pytest --require-mys
 .venv/bin/python -m pip check
 ```
 
-发布前还须逐项保存真实日志、MySQL/PG 行与浏览器证据：政策检索/档位/证据闸和可点击原文；物流直达业务 Agent；投诉两个按钮独立、仅转人工不建单、都不点可继续；闲聊只分类一次；订单后物流多步；无证据固定拒答/入池/建议；重复确认及刷新/进程重启仍只有一单。第 4 章真实校准与比较门槛、整分支后端独立评审也须通过。所有门槛通过才排空临时 8002、核对并停止旧 8001、迁移演示库并启动新单 worker 8001，再验健康和实际聊天；不承诺零停机，不在旧写入者仍运行时执行新增 NOT NULL 字段迁移。第 5 章集成方式须另行选择。
+发布前还须逐项保存真实日志、MySQL/PG 行与浏览器证据：政策检索/档位/证据闸和可点击原文；物流直达业务 Agent；投诉两个按钮独立、仅转人工不建单、都不点可继续；闲聊只分类一次；订单后物流多步；无证据固定拒答/入池/建议；重复确认及刷新/进程重启仍只有一单。第 4 章真实校准与比较门槛、整分支后端独立评审也须通过。所有门槛通过才排空临时 8002、核对并停止旧 8001、迁移演示库并启动新单 worker 8001，再验健康和实际聊天；不承诺零停机，不在旧写入者仍运行时执行新增 NOT NULL 字段迁移。第 5 章集成方式须另行选择。 本次依据保存的真实失败、针对性修复、修复后样例及页面持久化证据判断本地功能交付；正式评估的 incomplete 状态与质量限制保留，未宣称全量质量验收通过。
 
-评估说明与人工标注复核见 [dev-notes/ch05-evaluation.md](dev-notes/ch05-evaluation.md)，阶段证据见 [dev-notes/ch05.md](dev-notes/ch05.md)。真实报告已保存为 `evals/reports/ch05/2026-09-22-{intents,evidence,assessor}/report.md`；intents 仍有4条技术失败，evidence/assessor执行完整但质量指标需分别看待，不能引用 fixture 统计替代真实质量。
+评估说明与助手对参考标签的复核见 [dev-notes/ch05-evaluation.md](dev-notes/ch05-evaluation.md)，阶段证据见 [dev-notes/ch05.md](dev-notes/ch05.md)。首轮真实报告为 `evals/reports/ch05/2026-09-22-{intents,evidence,assessor}/report.md`，首轮 intents 有4条技术失败；最新 v3 与修复后定向样例见下方交付验证。evidence/assessor 执行完整但质量指标需分别看待，不能引用 fixture 统计替代真实质量。
 
-2026-09-21 本地验证记录：新增评估/演示及第 4 章评估回归 69 passed；完整 required suite 在真实隔离依赖下为 782 passed、4 个遗留 schema fixture 失败、1 条既有 Starlette warning（80.91 秒）。随后只修两个旧测试文件，真实 MySQL 复跑 10 passed（0.30 秒），覆盖全部四个失败。其后生产评估器修复 `00c7ad6` 的完整评估器文件验证为 25 passed（1.83 秒）；最终评审的旧审计兼容修复在真实隔离 MySQL 13307/PostgreSQL 15433、脚本模型下完成恢复/仓储/服务受影响文件验证，84 passed（8.87 秒）。该修复只排除有确切迁移标记、全行 completed 且结构不完整的旧审计，保留当前损坏与检查点引用冲突的严格拒绝。截至该历史阶段尚无后续全量全绿运行；2026-09-22 的最新完整验证结果见下段。此前 `pip check`、含 11 份 Prompt 的 wheel 及新模块零网络导入检查通过；两次生产修复之后未重建 wheel，旧构建结果只对应当时版本。真实模型质量、实际浏览器验收、演示库迁移/切换及最终集成仍待各自门槛完成。
+2026-09-21 本地验证记录：新增评估/演示及第 4 章评估回归 69 passed；完整 required suite 在真实隔离依赖下为 782 passed、4 个遗留 schema fixture 失败、1 条既有 Starlette warning（80.91 秒）。随后只修两个旧测试文件，真实 MySQL 复跑 10 passed（0.30 秒），覆盖全部四个失败。其后生产评估器修复 `00c7ad6` 的完整评估器文件验证为 25 passed（1.83 秒）；最终评审的旧审计兼容修复在真实隔离 MySQL 13307/PostgreSQL 15433、脚本模型下完成恢复/仓储/服务受影响文件验证，84 passed（8.87 秒）。该修复只排除有确切迁移标记、全行 completed 且结构不完整的旧审计，保留当前损坏与检查点引用冲突的严格拒绝。截至该历史阶段尚无后续全量全绿运行；2026-09-22 的最新完整验证结果见下段。此前 `pip check`、含 11 份 Prompt 的 wheel 及新模块零网络导入检查通过；两次生产修复之后未重建 wheel，旧构建结果只对应当时版本。该历史阶段的真实验收与切换待办见下方当前结论；最终分支集成仍待用户选择。
 
-整分支后端评审及最后一次限定复审已在 `4a5641d` 通过，无未关闭的必修代码问题。当前仍保留旧 8001；真实第 4/5 章模型评估、浏览器验收、演示库迁移及切换尚未完成，上述演示数据发送许可已于 2026-09-22 获得。
+整分支后端评审及最后一次限定复审已在 `4a5641d` 通过，无未关闭的必修代码问题。随后两个 Prompt 的限定修复也已通过真实样例和独立评审；当前服务切换完成，评估失败与限制见下段。
 
-2026-09-22 最新验证：`d2b8799` 上完整 required suite 为 **807 passed、1 条既有弃用 warning（84.32 秒）**，覆盖实际隔离 MySQL/PostgreSQL/Milvus 与本地离线模型。真实页面已通过政策来源引用、物流工具徽章、投诉独立按钮、只转人工不建单、明确确认后建单、重启前后重复确认仍1单、未知问题拒答入池以及满意度锁定。多步订单→物流的真实页面请求出现 `INVALID_TOOL_CALL`，未执行业务工具；另有3条正式评估的 Agent 控制格式失败，限定外部诊断因自动审批要求具体授权而等待用户答复。第4章两轮30条校准均保留技术失败，四策略比较尚未运行。因此尚不切换旧8001，不声明 finish。
+2026-09-22 交付验证：
+
+- `d2b8799` 的完整 required suite：**807 passed、1 条既有弃用 warning，84.32 秒**，覆盖隔离 MySQL/PostgreSQL/Milvus 和离线模型。后续两个 Prompt 修改在 `3cc14e4` 的预算/网关回归：**42 passed，2.04 秒**；纯 Prompt 使用真实标注样例验证，未把旧全量结果冒充最新全量。
+- 真实页面已验证：政策强制检索与引用原文、物流徽章、订单→物流两步/三次 Agent 决策、投诉按钮各自独立、只转人工不建单、不选择可续聊、取消不建单、明确确认后仅一单、重启前后重复确认不重复、未知问题拒答入池、反馈一次锁定、失败后新轮次恢复。
+- 第 5 章最新 35 条正式运行仍为 **incomplete**：33/35 分类及路由计分通过、31/35 业务标记通过，2 条最终答案未知引用失败。对应引用修正后的 3 条固定真实生成样例全部通过，额外 3 次请求/2,430 tokens；不能据此改写原 35 条结果。正式五轮累计 323 次调用/253,682 tokens，未包含另列诊断、定向样例及页面请求。
+- 第 4 章正式 60×4 共 240 次尝试完成，保留 1 条评分协议失败，manifest 为 **incomplete**。混合加重排 R@5=.99、MRR@50=.9767；模型评分 Faithfulness=.9939（41 个有效评分）。全部问题均给定品类，不能外推到默认无过滤检索；原文复核还记录 1 条误拒答和 5 条带少量无来源附加句的回答。
+- 服务切换前保存本地数据库备份，回填 67 条消息事件键；原 18 会话、67 消息、2 工单、120 知识块保持。切换后 8001 的实际物流 SSE 与可点击知识原文已通过，两库均保存 completed。临时 8002 已关闭；当前服务从本章 worktree 运行，尚未合并到基础分支。
+
+完整证据与限制：`dev-notes/ch04-evaluation.md`、`dev-notes/ch05-evaluation.md`、`evals/reports/ch05/2026-09-22-answer-citations/report.md` 和 `evals/reports/ch05/2026-09-22-acceptance/`。原失败样例全部保留；时间输出偶尔省略 UTC 标记，未接真实业务系统或后台持续监控。报告和本地迁移备份被 Git 忽略，合并后清理 worktree 前必须保留这些产物。
