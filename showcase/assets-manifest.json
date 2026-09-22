@@ -1,0 +1,102 @@
+[
+  {
+    "path": "README.md",
+    "bytes": 1845,
+    "sha256": "6e0b732f81a2e4e9ce15430c47af3e468c74d351fb34ff51392f1e9e6269d1b5"
+  },
+  {
+    "path": "assets/favicon.svg",
+    "bytes": 291,
+    "sha256": "4c106f78eaeec3adc18bb02172ef3524765aad799704cf5a9b45ad78b080fd8e"
+  },
+  {
+    "path": "assets/screenshots/01-workspace.png",
+    "bytes": 41929,
+    "sha256": "3e913f6f4fd4d81118ceb59173e519c1441698dabbc706c7864e190fbae2a488"
+  },
+  {
+    "path": "assets/screenshots/02-knowledge.png",
+    "bytes": 39551,
+    "sha256": "6f2b82389d8d4c0735eb19781e6b66513b392ea9b4442d53b46a65d347bb8cd9"
+  },
+  {
+    "path": "assets/screenshots/03-citation.png",
+    "bytes": 26027,
+    "sha256": "4f11b027a40e19bdf429a3efeb21e1a904548f8256c46fadc398a21775c263aa"
+  },
+  {
+    "path": "assets/screenshots/04-multi-step.png",
+    "bytes": 49686,
+    "sha256": "be1510ba3316dcf4bec59f97b3f548b57619ceec9c68d0ab781f3841376832bb"
+  },
+  {
+    "path": "assets/screenshots/05-complaint.png",
+    "bytes": 41093,
+    "sha256": "41d6476f03d449d0d910c71eac9c69aeb9c841722e977fbce1ccdac25bb32d36"
+  },
+  {
+    "path": "assets/screenshots/06-handoff.png",
+    "bytes": 40814,
+    "sha256": "5aaa838ca4173f947400c60b0b7991491c2ea9131549ee62d76fa18022793047"
+  },
+  {
+    "path": "assets/screenshots/07-ticket-confirmation.png",
+    "bytes": 42496,
+    "sha256": "b048108f7e11a08272fd0ddd0758a9e21fa0647ba9829234be5f1dc5cf8dd599"
+  },
+  {
+    "path": "assets/screenshots/08-refusal.png",
+    "bytes": 41806,
+    "sha256": "ee84c185e2684340e945455322d8a1464d8b06b2138f9774d5847dada3286562"
+  },
+  {
+    "path": "assets/showcase.js",
+    "bytes": 1369,
+    "sha256": "6a72d33330dc180fa364623da76fc081b20b51ff2e463d3f5ef8b1c8e12c51b9"
+  },
+  {
+    "path": "assets/style.css",
+    "bytes": 14061,
+    "sha256": "b487bd4f871e34fc56323f39b252b84c448b2c16869c6138cb919045b1a5177c"
+  },
+  {
+    "path": "assets/video/agent-demo.mp4",
+    "bytes": 2304712,
+    "sha256": "6618539ba63cdda6845d1f33580685d17ff902189c671dad7bb13c3fced805e9"
+  },
+  {
+    "path": "assets/video/agent-demo.srt",
+    "bytes": 2053,
+    "sha256": "315683c74d919b8b4080a4bc00c3c75e39cd0727b2b264c822dae128a3a1bbe7"
+  },
+  {
+    "path": "assets/video/agent-demo.vtt",
+    "bytes": 2061,
+    "sha256": "9a3f80da588a423e5b64d181845ac17f766623e75549a84b747c94477bc8c2a5"
+  },
+  {
+    "path": "assets/video/chapters.json",
+    "bytes": 805,
+    "sha256": "76b7656792fb1e9032db9d2931eb3b0ba136abdbec811c86622511f76a9c9665"
+  },
+  {
+    "path": "assets/video/narration.txt",
+    "bytes": 1540,
+    "sha256": "07acc77d4c10b51647de260f756e78f1ec1c67ab477352e646e64d603e0519b2"
+  },
+  {
+    "path": "index.html",
+    "bytes": 13553,
+    "sha256": "bc9e47472103988d97d1112143bda624bc9545cca52a0268573084ac2038a84d"
+  },
+  {
+    "path": "preview.png",
+    "bytes": 56771,
+    "sha256": "a657eb3d89daaa30222e114b17cc47340489a357d7c107a88bf1bc44124344b3"
+  },
+  {
+    "path": "project-brief.md",
+    "bytes": 3220,
+    "sha256": "80ab6c11cb109e316f6361c709b2db8bd5302cc8462ab8ce3258e5f2298db0da"
+  }
+]

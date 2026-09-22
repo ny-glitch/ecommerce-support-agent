@@ -1,0 +1,38 @@
+[
+  {
+    "scene": "intro",
+    "title": "项目概览 · 智能电商客服 Agent",
+    "start": 0,
+    "duration": 8.0
+  },
+  {
+    "scene": "knowledge",
+    "title": "01  知识问答与来源追溯",
+    "start": 8.0,
+    "duration": 23.0
+  },
+  {
+    "scene": "business",
+    "title": "02  多步工具调用 · 订单 → 物流",
+    "start": 31.0,
+    "duration": 23.0
+  },
+  {
+    "scene": "complaint",
+    "title": "03  用户确认 · 转人工与建工单各自独立",
+    "start": 54.0,
+    "duration": 24.0
+  },
+  {
+    "scene": "refusal",
+    "title": "04  证据不足 · 明确兜底并提供人工选项",
+    "start": 78.0,
+    "duration": 21.0
+  },
+  {
+    "scene": "outro",
+    "title": "工程实践 · 可追溯、可控、可检查",
+    "start": 99.0,
+    "duration": 24.0
+  }
+]

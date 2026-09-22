@@ -1,133 +1,198 @@
-# 中文电商客服示例
+# 智能电商客服
 
-这是一个基于 FastAPI、LangGraph、MySQL、PostgreSQL、Milvus 和 OpenAI 兼容 Chat Completions 接口的本地客服示例。当前工作流使用固定路由、知识检索与证据核验、有界 Agent 工具循环，并将会话审计和图检查点分别持久化。售后信息提取接口仍可独立使用。
+一个可以在本地运行的中文客服系统：在聊天页提问，系统根据意图查询知识库或调用业务工具，流式返回回答，并展示工具轨迹和可点击的知识来源。
 
-订单、商品和物流结果均由本地工具随机生成，只用于演示；知识原文与工单保存在本地 MySQL。本项目没有生产鉴权、真实电商接口或退款操作。
+基于 **FastAPI + LangChain + LangGraph**，采用外层固定 Workflow、内层 Agent 的结构。模型通过 OpenAI 兼容接口接入；MySQL 保存业务数据，PostgreSQL 保存图检查点，Milvus 提供混合检索。
 
-## 安装与配置
+查看成果可打开 [项目展示页](showcase/index.html)，其中包含真实截图、演示视频和技术设计。对外分享只需发送独立的 [展示包目录](showcase/README.md)，无需提供完整仓库。
 
-需要 Python 3.11 或更高版本、Docker 和 Docker Compose。`requirements.lock` 锁定开发及运行依赖；安装锁文件后再安装仓库本身：
+## Agent 能做什么
+
+| 功能 | 使用效果 |
+| --- | --- |
+| 知识问答 | 回答商品规格、退货政策等问题，点击引用编号查看原文和章节路径 |
+| 业务查询 | Agent 按需调用订单、商品、物流工具，聊天气泡显示工具徽章 |
+| 多步处理 | 根据中间结果继续查工具，例如先查订单，再查物流；缺少信息时追问 |
+| 证据不足兜底 | 知识库无法支持答案时明确拒答，记录低置信度问题，并提供人工选项 |
+| 投诉处理 | 展示独立的“转人工”和“建工单”按钮，由用户选择是否执行 |
+| 多轮对话 | 复用同一会话的完整历史，按轮数与 token 预算裁剪上下文 |
+| 售后信息提取 | 将自然语言描述提取为订单号、诉求类型和期望方案 |
+| 回答反馈 | 每段回答支持一次 👍 / 👎 反馈，选中后显示“已反馈”并锁定 |
+
+订单、商品和物流工具使用随机演示数据；工单会实际保存到本地数据库。“转人工”是前端模拟，不连接真人客服。
+
+### 一条消息如何处理
+
+```mermaid
+flowchart TD
+    U[用户消息] --> I[意图识别]
+    I -->|商品咨询 / 退款退货| R[混合检索 + 重排]
+    R --> G{证据是否充分}
+    G -->|否| F[拒答 / 记录问题 / 提供人工选项]
+    G -->|是| K{知识分档与业务需求}
+    K -->|高分纯知识| W[Workflow 引用原文回答]
+    K -->|中分或需要业务数据| A[Agent 按需调用工具]
+    K -->|低分但证据充分| L[基于证据生成回答]
+    I -->|物流 / 订单 / 售后| A
+    A --> T[查询订单 / 商品 / 物流]
+    T -->|结果回灌，受步数与预算限制| A
+    A --> O[生成最终回答]
+    I -->|投诉| C[安抚话术 + 两个独立选项]
+    I -->|闲聊| H[固定话术]
+```
+
+知识检索使用 `bge-m3` 向量召回与 Milvus 原生 BM25 中文全文检索，各取 Top-50，经 RRF 融合后用 `bge-reranker-v2-m3` 重排取 Top-10。支持品类过滤、问法归一和检索侧同义词扩展。
+
+三级分流只用于知识类问题：默认高分为 `> 0.8`，中分为 `0.7～0.8`，低分为 `< 0.7`。所有档位都必须通过证据检查；需要查询具体订单的退款问题，在政策检索通过后仍可进入 Agent。分数是检索信号，不代表答案正确率。闲聊也会先经过一次意图识别，之后直接返回固定话术。
+
+## 安装与启动
+
+### 1. 准备环境
+
+需要 **Python 3.11+、Docker 和 Docker Compose**。启动服务前请先运行 Docker Desktop。
+
+首次使用时，先用有权限的 GitHub 账号克隆[私有仓库](https://github.com/ny-glitch/ecommerce-support-agent)：
+
+```bash
+git clone https://github.com/ny-glitch/ecommerce-support-agent.git
+cd ecommerce-support-agent
+```
+
+在仓库根目录安装依赖并准备配置：
 
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.lock
 .venv/bin/python -m pip install --no-deps -e .
 [ -f .env ] || cp .env.example .env
+export PYTHONPATH="$PWD"
 ```
 
-若在多个 worktree 之间共用虚拟环境，运行下面的命令前先在目标仓库根目录设置 `export PYTHONPATH="$PWD"`，确保脚本使用当前工作副本的代码。
+最后两行保留已有 `.env`，并让后续脚本加载当前仓库代码。
 
-最后一条命令会保留已有 `.env`。至少填写真实可用的模型、密钥和本地数据库密码；不要提交 `.env`：
+### 2. 配置模型和数据库
+
+编辑本地 `.env`，完整配置项见 [.env.example](.env.example)。以 DeepSeek 为例：
 
 ```dotenv
-LLM_BASE_URL=https://api.example.com/v1
-LLM_MODEL=填写账户实际可用且支持 tools 和流式输出的模型名
-LLM_API_KEY=填写密钥
-DATABASE_URL=mysql+asyncmy://support:本地密码@127.0.0.1:3307/support
-MYSQL_TEST_PASSWORD=replace-support-test-password
-LLM_TOKEN_LIMIT_PARAM=max_completion_tokens
-LLM_CHAT_EXTRA_BODY={}
-CONTEXT_WINDOW_TOKENS=8192
-MAX_OUTPUT_TOKENS=1024
-TOKEN_SAFETY_MARGIN=512
-MAX_HISTORY_TURNS=12
-MAX_SESSIONS=100
-REQUEST_TIMEOUT_SECONDS=60
-TOOL_TIMEOUT_SECONDS=5
-TOOL_MAX_ATTEMPTS=2
+LLM_BASE_URL=https://api.deepseek.com
+LLM_MODEL=deepseek-flash
+LLM_API_KEY=填写你的密钥
+LLM_TOKEN_LIMIT_PARAM=max_tokens
+LLM_CHAT_EXTRA_BODY={"thinking":{"type":"disabled"}}
 ```
 
-DeepSeek 工具聊天的两个模型阶段需关闭思考模式，可配置 `LLM_CHAT_EXTRA_BODY={"thinking":{"type":"disabled"}}`。这是 DeepSeek 专用字段；其他上游默认使用 `{}`，除非其官方接口明确支持同名字段。OpenAI 兼容并不保证模型支持本示例依赖的工具选择、流式输出和 JSON 行为，需按实际模型验证。`LLM_TOKEN_LIMIT_PARAM` 对现代 OpenAI 模型通常是 `max_completion_tokens`，DeepSeek 及 Ollama 通常使用 `max_tokens`。
+模型名应选择账户实际可用的模型，参考 [DeepSeek 官方文档](https://api-docs.deepseek.com/)。切换上游时修改地址、模型名和密钥，并确认支持工具调用、流式输出和结构化 JSON。`LLM_CHAT_EXTRA_BODY` 中的关闭思考字段用于 DeepSeek；其他上游按其接口要求配置，通常设为 `{}`。
 
-若 Docker CLI 未加入当前 shell 的 `PATH`，macOS Docker Desktop 可临时执行：
+同时替换模板中的数据库与 MinIO 密码，并保持以下配置一致：
+
+| 配置 | 用途与对应关系 |
+| --- | --- |
+| `MYSQL_PASSWORD`、`MYSQL_ROOT_PASSWORD` | MySQL 容器密码；`DATABASE_URL` 的密码与 `MYSQL_PASSWORD` 一致 |
+| `POSTGRES_PASSWORD` | 图检查点数据库密码；`CHECKPOINT_DATABASE_URL` 使用相同密码 |
+| `MINIO_ROOT_USER`、`MINIO_ROOT_PASSWORD` | Milvus 对象存储凭据 |
+| `MYSQL_TEST_PASSWORD`、`MYSQL_TEST_ROOT_PASSWORD`、`POSTGRES_TEST_PASSWORD` | 隔离测试库密码；测试连接地址与其对应 |
+
+数据库地址、用户和端口可保留模板默认值。密码放入连接 URL 时，特殊字符需要 URL 编码。`.env` 只保存在本地，不提交到 Git。
+
+### 3. 启动基础服务
 
 ```bash
-export PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH"
+docker compose up -d --wait \
+  db workflow-db knowledge-etcd knowledge-minio knowledge-milvus
 ```
 
-启动数据库并初始化四张业务表及 FAQ 种子数据：
+默认连接端口：MySQL `3307`、PostgreSQL `5433`、Milvus `19530`。容器数据保存在 Docker volumes 中。
+
+### 4. 准备模型、数据库和演示知识库
+
+首次安装执行：
 
 ```bash
-docker compose up -d --wait db
+# 下载固定版本的向量模型和重排模型，并生成模型清单
+.venv/bin/python scripts/prepare_knowledge_models.py
+
+# 初始化业务表、工作流结构与 PostgreSQL 检查点
 .venv/bin/python scripts/init_db.py
+.venv/bin/python scripts/migrate_workflow.py
+.venv/bin/python scripts/init_workflow_checkpoints.py
+
+# 导入演示知识并建立 Milvus 索引
+.venv/bin/python scripts/init_knowledge.py
+.venv/bin/python scripts/index_knowledge.py
 ```
 
-初始化可重复执行，不会覆盖已有密钥或删除业务数据。
+模型首次下载需要联网和数 GB 磁盘空间，默认保存在 `.cache/ch04/models`；后续运行使用本地模型。若修改了 `KNOWLEDGE_MODELS_DIR`，下载命令也需通过 `--models-dir` 指定同一路径。演示知识来自 [data/knowledge/ch04/chunks.json](data/knowledge/ch04/chunks.json)。
 
-## 工作流启动顺序
+从旧版升级时，先备份数据库并停止旧服务，再执行 `migrate_workflow.py` 和 `init_workflow_checkpoints.py`；可用 `migrate_workflow.py --check-only` 检查结构。应用启动只检查依赖，不会自动迁移数据库、下载模型或修复索引。
 
-生产 lifespan 只检查已有 schema、语料、索引和固定模型 manifest，不会自动建表、执行 `ALTER`、调用 checkpoint `setup()` 或修复索引。首次部署按以下顺序显式准备：
-
-1. 启动 MySQL、PostgreSQL 和 Milvus 依赖：
-
-   ```bash
-   docker compose up -d --wait db workflow-db knowledge-etcd knowledge-minio knowledge-milvus
-   ```
-
-2. 在旧写入者已停止的维护窗口执行 MySQL 工作流迁移，然后用只读模式确认就绪：
-
-   ```bash
-   .venv/bin/python scripts/migrate_workflow.py
-   .venv/bin/python scripts/migrate_workflow.py --check-only
-   ```
-
-3. 显式初始化 PostgreSQL checkpoint 表：
-
-   ```bash
-   .venv/bin/python scripts/init_workflow_checkpoints.py
-   ```
-
-4. 确认第四章语料已导入、固定模型 manifest 已准备，并运行现有索引校验/构建命令。该命令只使用本地模型和本地数据：
-
-   ```bash
-   .venv/bin/python scripts/init_knowledge.py
-   .venv/bin/python scripts/index_knowledge.py
-   ```
-
-5. 在独立的 8002 端口以单 worker 启动并验收：
+### 5. 启动聊天服务
 
 ```bash
-.venv/bin/python -m uvicorn app.main:create_app --factory \
-  --host 127.0.0.1 --port 8002 --workers 1
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
+  .venv/bin/python -m uvicorn app.main:create_app --factory \
+  --host 127.0.0.1 --port 8001 --workers 1
 ```
 
-打开 `http://127.0.0.1:8002/` 可使用网页聊天、停止回复、新对话及售后提取。聊天的并发 guard 在进程内，因此必须使用单 worker。本次演示已于 2026-09-22 验收并切换到 8001；上述 8002 用于以后版本的独立验收。不要占用其他项目的 8000。
+打开 **[聊天页面](http://127.0.0.1:8001/)**，接口文档位于 [Swagger UI](http://127.0.0.1:8001/docs)。前端为原生 HTML / CSS / JavaScript，无需单独构建。
 
-会话、完整消息审计和工单持久化到 MySQL，服务重启后仍可恢复。只有 `completed` 的完整轮次会回灌给模型；失败、取消或结构不完整的轮次保留作审计，但不进入后续模型上下文。`MAX_HISTORY_TURNS` 限制回灌的最近完整轮次数。进程内 guard 只负责同会话互斥和活动请求容量，所以多 worker 会绕过这项约束。
+保持服务终端运行，按 `Ctrl+C` 停止。后续启动只需启动 Docker 服务并运行上述 Uvicorn 命令。当前会话并发控制在进程内，使用 **单 worker**。
 
-## 历史行为：第二章 API 与两阶段工具调用
+## 如何使用
 
-以下“每轮两次模型调用”、单工具和 FAQ `LIKE` 漏召回说明是第二章历史演示合同，不是当前工作流的行为承诺。当前工作流的路由、次数上限和知识证据规则由第五章配置与图约束。
+### 在聊天页体验
 
-发送物流问题：
+| 输入示例 | 可以观察到的功能 |
+| --- | --- |
+| `C65-Pro 支持哪些充电协议？` | 型号检索、带编号的知识引用 |
+| `退货政策是什么？` | 强制政策检索，点击引用查看原文 |
+| `订单 1001 的物流到哪了？` | Agent 调用物流工具，气泡显示工具徽章 |
+| `先查订单 1001 的状态，如果已经发货，再查物流。` | 根据订单结果决定是否继续调用物流工具 |
+| `我要投诉` | 出现“转人工”和“建工单”两个独立按钮 |
+| `你好` | 固定问候话术 |
+| `Z99-Pro 耳机可以戴着游泳吗？` | 对知识库不支持的问题明确兜底 |
 
-```bash
-curl --noproxy '*' -N --fail-with-body http://127.0.0.1:8001/api/chat \
-  -H 'Content-Type: application/json' \
-  -d '{"message":"订单 1001 的物流到哪了"}'
-```
+多步问题是否继续查询取决于实际工具结果；演示订单可能随机返回未发货或取消。
 
-从 `meta` 复制真实 `session_id` 可继续同一会话：
+- **查看来源**：点击回答中的 `[1]` 等引用，查看对应 chunk 原文与章节路径。
+- **转人工**：显示“已转接人工客服”和客服小猫的问候，不会创建工单。
+- **建工单**：点击并确认后才写入工单；重复确认同一动作不会重复建单。
+- **继续聊天**：不点任何建议按钮，也可以直接发送下一条消息。
+- **停止／新对话**：停止当前回复，或开始独立会话。页面刷新会开启新聊天，目前没有历史会话列表。
+- **满意度反馈**：点击 👍 或 👎，选择在当前浏览器本地保存，不上传后端。
+
+### 使用 API
+
+发送消息并实时查看 SSE：
 
 ```bash
 curl --noproxy '*' -N --fail-with-body http://127.0.0.1:8001/api/chat \
   -H 'Content-Type: application/json' \
-  -d '{"session_id":"复制 meta 中的 session_id","message":"我刚才问的是哪个订单的物流？"}'
+  -d '{"message":"订单 1001 的物流到哪了？"}'
 ```
 
-每轮聊天固定采用两个模型阶段：第一阶段决定是否调用工具；若有调用，服务最多执行一个逻辑工具（暂时性错误最多尝试两次）；第二阶段不绑定工具，并生成最终文本。即使问题无需工具，也会进入第二阶段，第一阶段的普通文本不会直接展示。因此每轮通常产生两次模型调用及相应费用。
+从首个 `meta` 事件复制 `session_id`，下一轮携带该值即可续聊：
 
-`POST /api/chat` 返回 `text/event-stream`：
+```bash
+curl --noproxy '*' -N --fail-with-body http://127.0.0.1:8001/api/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"session_id":"替换为上一轮返回的 session_id","message":"我刚才问的是哪个订单？"}'
+```
 
-- `meta`：含 `session_id`、`turn_id`、输入 token 估算和历史裁剪数。
-- `tool_status`：工具开始、重试和终态；`not_found` 是有效业务结果，不是传输失败。
-- `token`：第二阶段的真实文本增量，可能出现多次。
-- `done`：正常完成并包含同一个 `session_id`。
-- `error`：流开始后的安全错误；出现后不会发送 `done`。
+可选字段 `category` 用于限定知识检索品类。会话和完整消息持久化保存，后续请求只使用已完成的历史轮次作为上下文。
 
-客户端必须以 `done` 判断成功。HTTP 200、部分 token 或工具完成都不代表整轮完成。
+| SSE 事件 | 内容 |
+| --- | --- |
+| `meta` | 会话和轮次标识 |
+| `workflow_status` / `tool_status` | 工作流进度与工具执行状态 |
+| `sources` | 引用来源 |
+| `actions` | 可选的转人工、建工单建议 |
+| `token` | 回复文本增量 |
+| `done` / `error` | 本轮成功完成或失败 |
 
-售后提取仍是独立的单次 JSON 接口：
+客户端以 `done` 判断完成；HTTP 200 或收到部分文本不表示整轮成功。
+
+售后描述提取：
 
 ```bash
 curl --noproxy '*' --fail-with-body http://127.0.0.1:8001/api/after-sales/extract \
@@ -135,130 +200,46 @@ curl --noproxy '*' --fail-with-body http://127.0.0.1:8001/api/after-sales/extrac
   -d '{"description":"订单 A123 到货破损，希望换一个新的"}'
 ```
 
-## 演示与标注评估
+返回字段为 `order_id`、`request_type`、`expected_resolution`。诉求类型包括退款、退货退款、换货、维修等；没有提供的订单号或期望方案可返回 `null`。
 
-三条独立工具流演示会依次运行物流、退货政策和邮费问题，并校验每条流都以 `done` 结束。邮费的 `not_found` 是预期结果：FAQ 使用当前问题中的字面关键词查询，种子数据故意没有“邮费”，脚本不会把该业务结果当成失败。
+### 常用配置
 
-```bash
-BASE_URL=http://127.0.0.1:8001 bash scripts/demo_tools.sh
-```
-
-第二章评估器读取 `evals/ch02-cases.json` 的九组标注（共十轮），通过真实 HTTP SSE 发问，再用同一 `.env` 的 `DATABASE_URL` 读取 `demo` 用户的会话审计。它按 `meta.turn_id` 隔离每轮，自动检查 `done`、轮次完成状态、最多一次模型工具申请、调用与结果配对、标注参数和结果状态。多轮样例复用首轮 `session_id`，但分别判定每一轮。
-
-```bash
-.venv/bin/python scripts/evaluate_tools.py \
-  --base-url http://127.0.0.1:8001 \
-  --output evals/reports/ch02-latest.json
-```
-
-协议或工具证据失败会令命令返回非零。自动通过只表示协议及标注结构匹配；每条 `semantic_review` 始终为 `pending_manual_review`，必须按标注集中的 rubric 人工核对最终回答。报告仅保存问题、会话/轮次标识、安全 SSE 事件、实际工具调用与结果及最终文本，不读取或输出密钥。第一章的提取与普通多轮回归仍可用 `scripts/evaluate.py` 和 `scripts/demo.sh` 独立运行。
-
-## 测试
-
-离线测试不产生真实模型费用：
-
-```bash
-.venv/bin/python -m pytest -q
-```
-
-MySQL 集成测试使用隔离的 `support_test` 数据库，不能指向开发库。Docker Compose 从 `.env` 读取 `MYSQL_TEST_PASSWORD`，pytest 只从进程环境或被 Git 忽略的 `.env.test` 读取 `TEST_DATABASE_URL`。创建 `.env.test`，并让 URL 密码与 `.env` 中的 `MYSQL_TEST_PASSWORD` 一致；不要填写真实生产凭据：
-
-```dotenv
-# .env.test
-TEST_DATABASE_URL=mysql+asyncmy://support_test:replace-support-test-password@127.0.0.1:13307/support_test
-```
-
-随后启动测试库并强制运行集成测试：
-
-```bash
-docker compose --profile test up -d --wait test-db
-.venv/bin/python -m pytest tests/integration --require-mysql -q
-```
-
-离线和 MySQL 测试验证代码、持久化及协议失败处理，不能替代真实模型的工具选择、语义 rubric 或浏览器验收。
-
-## 错误与限制
-
-在 SSE 开始前，HTTP 错误为 `{"error":{"code":"...","message":"..."}}`。常见错误包括：
-
-| HTTP | `code` | 含义 |
+| 配置 | 默认值 | 作用 |
 | --- | --- | --- |
-| 422 | `INVALID_REQUEST` | 请求字段、类型或长度不符合要求 |
-| 413 | `INPUT_TOO_LONG` | 必需提示、工具 schema 与当前输入无法放入预算 |
-| 404 | `SESSION_NOT_FOUND` | 会话不存在或不属于当前固定演示用户 |
-| 409 | `SESSION_BUSY` | 同一会话已有进行中的请求 |
-| 503 | `SESSION_CAPACITY` | 当前进程的活动会话数达到上限 |
-| 503 | `DB_ERROR` | 会话审计暂时无法保存 |
-| 504 | `UPSTREAM_TIMEOUT` | 整轮请求超过共享时限 |
-| 502 | `INVALID_TOOL_CALL` | 模型返回多个、缺少标识或格式无效的工具调用 |
-| 502 | `UPSTREAM_ERROR` | 上游连接或调用失败 |
-| 502 | `UPSTREAM_INCOMPLETE` | 最终文本为空或未正常完成 |
-| 502 | `STRUCTURED_OUTPUT_ERROR` | 售后提取结果未通过 JSON/Pydantic 校验 |
+| `MAX_HISTORY_TURNS` | `12` | 送入模型的最近完整轮次数上限 |
+| `CONTEXT_WINDOW_TOKENS` | `8192` | 单次模型上下文预算 |
+| `MAX_OUTPUT_TOKENS` | `1024` | 单次输出上限 |
+| `AGENT_MAX_TOOL_CALLS` | `4` | 每轮 Agent 工具调用上限 |
+| `AGENT_MAX_DECISIONS` | `5` | 每轮 Agent 决策上限 |
+| `TURN_MODEL_BUDGET` | `49152` | 整轮模型 token 预算 |
+| `TOOL_TIMEOUT_SECONDS` / `TOOL_MAX_ATTEMPTS` | `5` / `2` | 工具超时与最大尝试次数 |
 
-单条 `message` 或 `description` 最多 32,000 个字符。上下文预算包含系统提示、五个工具 schema、完整历史轮次、本轮工具调用及结果。`estimated_input_tokens` 基于 UTF-8 字节数保守估算，并非供应商计费 tokenizer 的精确值；应用还为输出和安全余量预留空间。
+预算使用保守估算，实际计费以模型供应商为准。角色设定和回答约束位于 [app/prompts](app/prompts)，包括依据证据回答、不承诺到账时间等要求。
 
-## 第 5 章 Workflow 评估与交付
+## 常见问题
 
-第 5 章默认后端使用固定 Workflow：一次分类、知识检索/三级分档/证据闸、只读业务 Agent、独立人工建议与工单确认。用户已于 2026-09-22 明确允许向 DeepSeek 发送约定的演示数据。**实现、限定修复评审与本地页面验收已完成，新版运行于 http://127.0.0.1:8001/**；临时 8002 已关闭，8000 未动。正式模型评估保留失败记录，不能把功能验收解释为全量质量零错。用户已选择本地合并，代码现位于 `codex/ch04-hybrid-rag`；未推送远程。
+- **网页打不开或不能发消息**：使用 `http://127.0.0.1:8001/`，不要直接打开 `app/web/index.html`；确认 Uvicorn 终端仍在运行，端口没有冲突。
+- **找不到 Docker 命令**：先启动 Docker Desktop。macOS 可将 `/Applications/Docker.app/Contents/Resources/bin` 加入 `PATH`。
+- **启动提示数据库、模型或索引未就绪**：检查 `docker compose ps` 和初始化命令输出，确认本地模型清单及索引已准备完成。
+- **模型鉴权或余额错误**：检查 `.env` 中的模型地址、密钥、可用模型和账户余额，修改配置后重启应用。
+- **知识回答被拒绝**：先确认演示库是否包含该内容及品类过滤是否正确；检索分数高也需要通过证据检查。
 
-本地帮助不读取模型配置或发请求：
+## 演示脚本与开发入口
 
-```bash
-.venv/bin/python scripts/evaluate_workflow.py --help
-.venv/bin/python scripts/demo_workflow.py --help
-```
-
-以下评估命令会把演示问题、完成历史、候选知识及必要工具上下文发送到 `.env` 配置的模型端点；须先取得对应数据发送许可。计划批准本身不代表该许可。
+已有服务启动后，可通过脚本体验完整工作流：
 
 ```bash
-.venv/bin/python scripts/evaluate_workflow.py --cases evals/ch05/intents.jsonl --output-dir evals/reports/ch05/intents
-.venv/bin/python scripts/evaluate_workflow.py --cases evals/ch05/evidence.jsonl --output-dir evals/reports/ch05/evidence
-.venv/bin/python scripts/evaluate_workflow.py --scope assessor --cases evals/ch05/evidence_adversarial.jsonl --output-dir evals/reports/ch05/assessor
-# 仅冒烟，产物必须标 smoke，不能代替全量：
-.venv/bin/python scripts/evaluate_workflow.py --cases evals/ch05/intents.jsonl --output-dir evals/reports/ch05/intents-smoke --limit 1
-```
-
-Workflow scope 只给 runner 传 `question/history/category`，复用实际检索、重排和图；35 条意图与 12 条证据真值只用于评分。审计、动作建议、问题池都写到评估隔离适配器及报告，不写演示会话表、不建工单、不连接 checkpoint 库；这些结果不能代替两库持久化验收。Assessor scope 只给同一 `WorkflowGateway.assess` 传两条独立 fixture 的 question/intent/sources；其受控 score 只是 DTO 字段，不统计真实检索、路由或档位。
-
-每个输出目录包含 `manifest.json`、`results.jsonl`、`report.md` 与原子逐条缓存 `.results/`。指纹覆盖实际输入/真值、有效配置、0.7/0.8 阈值、Prompt、代码、依赖和知识/模型身份；不同配置或 invalid 目录不能续跑。已保存的失败不自动重试；重测使用新目录。`complete` 只表示全部计划样本执行完毕，准确率、误路由、支持/拒答/引用失败仍须查看具体失败行；`smoke/partial/incomplete/invalid` 都不能宣布正式评估完成。失败保留在分母内；实际分数分档；缺失 token 用量保留 null，预算预留量不是供应商计费 token。
-
-本次切换后的演示服务使用 8001；下列命令会发出模型请求。投诉默认不建单，只有显式确认命令会写入工单：
-
-```bash
-.venv/bin/python scripts/demo_workflow.py --base-url http://127.0.0.1:8001 --scenario policy
 .venv/bin/python scripts/demo_workflow.py --base-url http://127.0.0.1:8001 --scenario logistics
+.venv/bin/python scripts/demo_workflow.py --base-url http://127.0.0.1:8001 --scenario policy
 .venv/bin/python scripts/demo_workflow.py --base-url http://127.0.0.1:8001 --scenario complaint
-.venv/bin/python scripts/demo_workflow.py --base-url http://127.0.0.1:8001 --scenario complaint --confirm-ticket
-.venv/bin/python scripts/demo_workflow.py --base-url http://127.0.0.1:8001 --scenario chitchat
-.venv/bin/python scripts/demo_workflow.py --base-url http://127.0.0.1:8001 --scenario multi_step
-.venv/bin/python scripts/demo_workflow.py --base-url http://127.0.0.1:8001 --scenario unknown
 ```
 
-脚本要求实际 SSE `done`；HTTP 200、部分文本或 EOF 都不算成功。来源从真实 source ID/hash 构造同源固定路径并校验响应，不访问模型提供的任意 URL，不跟随重定向。投诉默认只展示建议；只有 `--confirm-ticket` 才对当前真实 action 发两次空 JSON `{}`，校验相同工单编号。业务工具仍返回原有随机演示数据；多步演示可能合理提前结束，需如实记录并另选可继续查询的真实结果，不改造返回数据。
+其他场景与选项见 `scripts/demo_workflow.py --help`。脚本会调用配置的模型；投诉场景默认只展示建议，加 `--confirm-ticket` 才实际创建工单。
 
-最终本地检查命令：
+- [测试代码](tests)：单元测试与数据库、检索、工作流集成测试。
+- [检索评估说明](dev-notes/ch04-evaluation.md)：纯向量、BM25、混合、混合加重排的评估方法与结果。
+- [Workflow 评估说明](dev-notes/ch05-evaluation.md)：意图、证据与回答质量评估。
+- [开发记录](dev-notes/ch05.md)与[设计文档](docs/superpowers/specs/2026-09-21-ch05-workflow-agent-design.md)：实现细节和开发过程。
+- [GitHub 同步说明](docs/github-sync.md)：私有仓库的提交后推送、暂停开关和新电脑配置。
 
-```bash
-HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 .venv/bin/python -m pytest --require-mysql --require-postgres --require-milvus --require-local-models -q --tb=line
-.venv/bin/python -m pip check
-```
-
-发布前还须逐项保存真实日志、MySQL/PG 行与浏览器证据：政策检索/档位/证据闸和可点击原文；物流直达业务 Agent；投诉两个按钮独立、仅转人工不建单、都不点可继续；闲聊只分类一次；订单后物流多步；无证据固定拒答/入池/建议；重复确认及刷新/进程重启仍只有一单。第 4 章真实校准与比较门槛、整分支后端独立评审也须通过。所有门槛通过才排空临时 8002、核对并停止旧 8001、迁移演示库并启动新单 worker 8001，再验健康和实际聊天；不承诺零停机，不在旧写入者仍运行时执行新增 NOT NULL 字段迁移。第 5 章已按用户选择完成本地合并。 本次依据保存的真实失败、针对性修复、修复后样例及页面持久化证据判断本地功能交付；正式评估的 incomplete 状态与质量限制保留，未宣称全量质量验收通过。
-
-评估说明与助手对参考标签的复核见 [dev-notes/ch05-evaluation.md](dev-notes/ch05-evaluation.md)，阶段证据见 [dev-notes/ch05.md](dev-notes/ch05.md)。首轮真实报告为 `evals/reports/ch05/2026-09-22-{intents,evidence,assessor}/report.md`，首轮 intents 有4条技术失败；最新 v3 与修复后定向样例见下方交付验证。evidence/assessor 执行完整但质量指标需分别看待，不能引用 fixture 统计替代真实质量。
-
-2026-09-21 本地验证记录：新增评估/演示及第 4 章评估回归 69 passed；完整 required suite 在真实隔离依赖下为 782 passed、4 个遗留 schema fixture 失败、1 条既有 Starlette warning（80.91 秒）。随后只修两个旧测试文件，真实 MySQL 复跑 10 passed（0.30 秒），覆盖全部四个失败。其后生产评估器修复 `00c7ad6` 的完整评估器文件验证为 25 passed（1.83 秒）；最终评审的旧审计兼容修复在真实隔离 MySQL 13307/PostgreSQL 15433、脚本模型下完成恢复/仓储/服务受影响文件验证，84 passed（8.87 秒）。该修复只排除有确切迁移标记、全行 completed 且结构不完整的旧审计，保留当前损坏与检查点引用冲突的严格拒绝。截至该历史阶段尚无后续全量全绿运行；2026-09-22 的最新完整验证结果见下段。此前 `pip check`、含 11 份 Prompt 的 wheel 及新模块零网络导入检查通过；两次生产修复之后未重建 wheel，旧构建结果只对应当时版本。该历史阶段的真实验收与切换待办见下方当前结论；最终分支集成已于 2026-09-22 按用户选择完成。
-
-整分支后端评审及最后一次限定复审已在 `4a5641d` 通过，无未关闭的必修代码问题。随后两个 Prompt 的限定修复也已通过真实样例和独立评审；当前服务切换完成，评估失败与限制见下段。
-
-2026-09-22 交付验证：
-
-- `d2b8799` 的完整 required suite：**807 passed、1 条既有弃用 warning，84.32 秒**，覆盖隔离 MySQL/PostgreSQL/Milvus 和离线模型。后续两个 Prompt 修改在 `3cc14e4` 的预算/网关回归：**42 passed，2.04 秒**；纯 Prompt 使用真实标注样例验证，未把旧全量结果冒充最新全量。
-- 真实页面已验证：政策强制检索与引用原文、物流徽章、订单→物流两步/三次 Agent 决策、投诉按钮各自独立、只转人工不建单、不选择可续聊、取消不建单、明确确认后仅一单、重启前后重复确认不重复、未知问题拒答入池、反馈一次锁定、失败后新轮次恢复。
-- 第 5 章最新 35 条正式运行仍为 **incomplete**：33/35 分类及路由计分通过、31/35 业务标记通过，2 条最终答案未知引用失败。对应引用修正后的 3 条固定真实生成样例全部通过，额外 3 次请求/2,430 tokens；不能据此改写原 35 条结果。正式五轮累计 323 次调用/253,682 tokens，未包含另列诊断、定向样例及页面请求。
-- 第 4 章正式 60×4 共 240 次尝试完成，保留 1 条评分协议失败，manifest 为 **incomplete**。混合加重排 R@5=.99、MRR@50=.9767；模型评分 Faithfulness=.9939（41 个有效评分）。全部问题均给定品类，不能外推到默认无过滤检索；原文复核还记录 1 条误拒答和 5 条带少量无来源附加句的回答。
-- 服务切换前保存本地数据库备份，回填 67 条消息事件键；原 18 会话、67 消息、2 工单、120 知识块保持。切换后 8001 的实际物流 SSE 与可点击知识原文已通过，两库均保存 completed。临时 8002 已关闭；当前服务已从合并后的主目录运行，基础分支为 `codex/ch04-hybrid-rag`。
-
-完整证据与限制：`dev-notes/ch04-evaluation.md`、`dev-notes/ch05-evaluation.md`、`evals/reports/ch05/2026-09-22-answer-citations/report.md` 和 `evals/reports/ch05/2026-09-22-acceptance/`。原失败样例全部保留；时间输出偶尔省略 UTC 标记，未接真实业务系统或后台持续监控。报告和本地迁移备份被 Git 忽略，已逐文件校验并保留到主目录；环境原文件及额外诊断归档位于 `.cache/ch05-integration-20260922/`，随后才清理临时工作树。
-
-本地合并后的新全量验证：在主目录的 `e337cfb` 上运行全部 required 检查，**807 passed、1 条既有弃用 warning，114.08 秒**，日志 `evals/reports/ch05/2026-09-22-validation/pytest-after-merge.txt`。主目录单 worker 8001 的真实物流请求收到 139 个 token 帧、一次成功工具调用及 terminal done。临时功能分支和 worktree 已正常清理，未使用强制删除；测试库回归前快照、原始评估报告及配置备份均保留本地。
+当前版本用于本地演示与开发，尚未接入真实电商、真人客服或生产鉴权。检索与模型回答仍可能误判；正式评估中的失败与适用范围保留在评估说明中。
